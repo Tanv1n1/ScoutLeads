@@ -72,9 +72,11 @@ Addresses the server rejects, or on domains with no mail server, are never retur
 | Web search | Brave results, then fetches the result pages (social networks are never fetched). Cached 7 days. | `BRAVE_API_KEY` |
 | Hunter | Email finder | `HUNTER_API_KEY` |
 | Pattern guess | Builds `first.last@` etc. from patterns seen on the domain; accepted only if confirmed | — |
-| Verify | MX + SMTP with a catch-all probe; Hunter is asked when SMTP cannot decide | optional `HUNTER_API_KEY` |
+| Verify | MX + SMTP with a catch-all probe (free), then **ZeroBounce** for every address that survives; Hunter only as a fallback | `ZEROBOUNCE_API_KEY` (recommended), optional `HUNTER_API_KEY` |
 
-SMTP checks need outbound port 25. If your host blocks it, SMTP results come back `unknown`; set a Hunter key (or pass `--no-smtp`) and expect more `LIKELY` than `VERIFIED`.
+SMTP checks need outbound port 25. With a ZeroBounce key, port 25 being blocked no longer matters: ZeroBounce does the deliverability check from its own servers (pass `--no-smtp` to skip the local check). It costs one ZeroBounce credit per address checked; addresses SMTP already proves undeliverable are skipped, results are cached for 7 days, and at most one pattern guess is paid for once it is confirmed.
+
+A ZeroBounce verdict of `valid` gives `VERIFIED`; `invalid`, `spamtrap`, `abuse` and `do_not_mail` are rejected and never returned; `catch-all` and `unknown` stay `LIKELY` / `SOURCE_CONFIRMED`. The raw verdict and sub-status are kept in `email_verification.api_detail`. This predicts a bounce, it cannot guarantee delivery.
 
 ### Configuration
 
@@ -83,7 +85,8 @@ All optional; the tool runs with none, with fewer sources.
 | Variable | Purpose |
 |---|---|
 | `BRAVE_API_KEY` | Web search (enrichment and Discover) |
-| `HUNTER_API_KEY` | Email finder and verifier |
+| `ZEROBOUNCE_API_KEY` | Primary email verifier |
+| `HUNTER_API_KEY` | Email finder; verifier fallback |
 | `SCOUT_SMTP_HELO`, `SCOUT_SMTP_FROM` | Identity used in SMTP checks (use a domain you control) |
 | `SCOUT_CACHE_DIR`, `SCOUT_CACHE=0` | Cache location (default `.scout_cache`); disable caching |
 | `SCOUT_PROXY`, `SCOUT_PROXY_FILE`, `SCOUT_FREE_PROXY` | Proxy for outbound requests |

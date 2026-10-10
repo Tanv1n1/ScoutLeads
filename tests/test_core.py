@@ -177,3 +177,42 @@ def test_api_verifier_can_decide_when_smtp_cannot():
     assert judge({"smtp": "accepted", "catch_all": True, "api": {"hunter": "invalid"}}) == "invalid"
     assert judge({"smtp": "accepted", "catch_all": True, "api": {}}) == "undecided"
 
+
+
+class FakeEnr:
+    def __init__(self, **r): self.r = {"exists": False, "accept_all": False, "mx": True, "checked": True, "score": 0, **r}
+    def _verify_email_smtp(self, email): return self.r
+
+
+def _zb_verifier(monkeypatch, enr, zb):
+    from app.enrichment import verify as ver
+    monkeypatch.setenv("SCOUT_CACHE", "0"); monkeypatch.setenv("ZEROBOUNCE_API_KEY", "k"); monkeypatch.delenv("HUNTER_API_KEY", raising=False)
+    calls = []
+    monkeypatch.setattr(ver.Verifier, "_zerobounce", staticmethod(lambda e: (calls.append(e), zb)[1]))
+    return ver.Verifier(enr, True), calls
+
+
+def test_zerobounce_not_called_when_smtp_already_rejected(monkeypatch):
+    v, calls = _zb_verifier(monkeypatch, FakeEnr(exists=False), {"status": "valid", "raw": {}})
+    assert v.verify("x@a.com")["smtp"] == "rejected" and calls == []
+
+
+def test_zerobounce_decides_catch_all(monkeypatch):
+    from app.enrichment.verify import judge
+    v, calls = _zb_verifier(monkeypatch, FakeEnr(exists=True, accept_all=True), {"status": "valid", "raw": {"status": "valid", "sub_status": ""}})
+    res = v.verify("x@a.com")
+    assert calls == ["x@a.com"] and judge(res) == "valid" and res["api_detail"]["zerobounce"]["status"] == "valid"
+
+
+def test_zerobounce_invalid_maps_to_rejected(monkeypatch):
+    from app.enrichment.verify import judge
+    v, _ = _zb_verifier(monkeypatch, FakeEnr(exists=True), {"status": "invalid", "raw": {"status": "spamtrap", "sub_status": ""}})
+    assert judge(v.verify("x@a.com")) == "invalid"
+
+
+def test_zerobounce_failure_is_not_cached(monkeypatch, tmp_path):
+    from app.common import cache
+    v, _ = _zb_verifier(monkeypatch, FakeEnr(exists=True), None)
+    monkeypatch.setenv("SCOUT_CACHE", "1"); monkeypatch.setenv("SCOUT_CACHE_DIR", str(tmp_path))
+    v.verify("x@a.com")
+    assert cache.get("verify:x@a.com") is None
