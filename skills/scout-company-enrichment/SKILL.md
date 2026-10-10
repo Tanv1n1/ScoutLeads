@@ -12,7 +12,7 @@ python enrich_cli.py spocs.json out.json --batch 10 --workers 3   # re-run until
 python enrich_cli.py spocs.json out.json --batch 10 --no-smtp # if port 25 is blocked on the host
 ```
 
-Input per SPOC: `{"lead_id","name","role","company","domain","email","phone"}` (name + company or domain is enough).
+Input per SPOC: `{"lead_id","name","role","company","domain","email","phone"}` (name and domain or website are required; without a domain the gap `domain_unresolved` is returned).
 
 ## Sources it checks (in order)
 provided values; the company site (team/leadership/about links found on the homepage and sitemap, plus schema.org data); web search (`BRAVE_API_KEY`); Hunter (`HUNTER_API_KEY`); then pattern guesses confirmed by the mail server or a verifier. Verifiers: SMTP (free), then ZeroBounce (`ZEROBOUNCE_API_KEY`, one credit per address; Hunter is the fallback). No social-network scraping.

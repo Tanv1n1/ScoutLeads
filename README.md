@@ -25,6 +25,8 @@ pip install -r requirements.txt
 cp .env.example .env      # then add your keys
 ```
 
+The enrichment tool needs only `httpx` and `dnspython`; the other requirements (`requests`, `rich`, `free-proxy`) are for the scouting menu.
+
 ## Enrichment: complete and verify a SPOC's contact details
 
 ```bash
@@ -33,7 +35,14 @@ python enrich_cli.py spocs.json out.json --batch 10 --workers 3
 
 Re-run the same command until it prints `"remaining": 0`. Progress is saved after every record, so it is safe to stop and resume, and short enough for agent sessions that kill long scripts.
 
-**Input**: a JSON list. `name` plus `company` or `domain` is enough; anything you already have is kept and checked.
+| Flag | Default | Purpose |
+|---|---|---|
+| `--batch N` | 10 | Max SPOCs per run |
+| `--workers N` | 3 | SPOCs processed in parallel |
+| `--state FILE` | `<output>.state.json` | Resume state |
+| `--no-smtp` | off | Skip the local MX/SMTP check (e.g. port 25 blocked) |
+
+**Input**: a JSON list. `name` and `domain` (or `website`) are required; a record without a domain is not guessed and comes back with the gap `domain_unresolved`. `company` and `role` are echoed back. Anything you already have (`email`, `phone`) is kept and checked.
 
 ```json
 [{"lead_id": "L-102", "name": "Priya Nair", "role": "CEO", "company": "Acme Digital",
@@ -55,7 +64,7 @@ Re-run the same command until it prints `"remaining": 0`. Progress is saved afte
 
 | Status | Meaning | Use as |
 |---|---|---|
-| `VERIFIED` | Mail server accepted it and the domain is not catch-all, or a verifier API says valid | send-ready |
+| `VERIFIED` | ZeroBounce says valid, or the mail server accepted it and the domain is not catch-all | send-ready |
 | `SOURCE_CONFIRMED` | Cannot be server-verified, but two or more independent sources list it for this person | usable |
 | `LIKELY` | One public source lists it for this person | usable, flag it |
 | `UNVERIFIED` / `NOT_FOUND` | Only guesses, or nothing | do not send |
@@ -74,7 +83,7 @@ Addresses the server rejects, or on domains with no mail server, are never retur
 | Pattern guess | Builds `first.last@` etc. from patterns seen on the domain; accepted only if confirmed | — |
 | Verify | MX + SMTP with a catch-all probe (free), then **ZeroBounce** for every address that survives; Hunter only as a fallback | `ZEROBOUNCE_API_KEY` (recommended), optional `HUNTER_API_KEY` |
 
-SMTP checks need outbound port 25. With a ZeroBounce key, port 25 being blocked no longer matters: ZeroBounce does the deliverability check from its own servers (pass `--no-smtp` to skip the local check). It costs one ZeroBounce credit per address checked; addresses SMTP already proves undeliverable are skipped, results are cached for 7 days, and at most one pattern guess is paid for once it is confirmed.
+SMTP checks need outbound port 25. With a ZeroBounce key, port 25 being blocked no longer matters: ZeroBounce does the deliverability check from its own servers (pass `--no-smtp` to skip the local check). It costs one ZeroBounce credit per address checked; addresses SMTP already proves undeliverable are skipped, results are cached for 7 days, and checking of further pattern guesses stops once one is confirmed.
 
 A ZeroBounce verdict of `valid` gives `VERIFIED`; `invalid`, `spamtrap`, `abuse` and `do_not_mail` are rejected and never returned; `catch-all` and `unknown` stay `LIKELY` / `SOURCE_CONFIRMED`. The raw verdict and sub-status are kept in `email_verification.api_detail`. This predicts a bounce, it cannot guarantee delivery.
 
@@ -90,6 +99,8 @@ All optional; the tool runs with none, with fewer sources.
 | `SCOUT_SMTP_HELO`, `SCOUT_SMTP_FROM` | Identity used in SMTP checks (use a domain you control) |
 | `SCOUT_CACHE_DIR`, `SCOUT_CACHE=0` | Cache location (default `.scout_cache`); disable caching |
 | `SCOUT_PROXY`, `SCOUT_PROXY_FILE`, `SCOUT_FREE_PROXY` | Proxy for outbound requests |
+| `SCOUT_DELAY_MIN`, `SCOUT_DELAY_MAX` | Scouting menu: seconds between scrapes |
+| `LINKEDIN_COOKIE` | Scouting menu: LinkedIn `li_at` cookie |
 
 `enrich_cli.py` reads real environment variables; export them or load your `.env` first (`set -a; source .env; set +a`). An agent skill file for pipelines is in [skills/scout-company-enrichment/SKILL.md](skills/scout-company-enrichment/SKILL.md).
 
@@ -106,9 +117,9 @@ python scout.py            # menu;  --verbose for debug logs,  --version,  --hel
 | 12 Discover | Searches for businesses and scores them on cross-border signals (worldwide shipping, export language, multi-currency) and recurring-billing signals (subscription pricing, Stripe/Paddle/Chargebee/Payoneer/Wise). Ranks by fit score. Needs `BRAVE_API_KEY`, or paste domains. |
 | 10 / 11 | View past exports / settings |
 
-After scraping, an optional enrichment step looks for the lead's email on their site and bio links, detects the email pattern, and verifies by SMTP. Results export to `<platform>_export_<timestamp>.csv`. Discovery signals are keyword evidence, not proof.
+After scraping, an optional enrichment step looks for the lead's email on their site and bio links, detects the email pattern, and verifies by SMTP only. It does not use ZeroBounce and does not complete a named SPOC; for that, use `enrich_cli.py`. Results export to `<platform>_export_<timestamp>.csv`. Discovery signals are keyword evidence, not proof.
 
-LinkedIn needs your `li_at` cookie (browser DevTools → Application → Cookies) as `LINKEDIN_COOKIE` in `.env`. Proxies are optional.
+LinkedIn needs your `li_at` cookie (browser DevTools → Application → Cookies) as `LINKEDIN_COOKIE` in `.env`. Proxies are optional. The menu reads `.env` itself; `enrich_cli.py` does not.
 
 ## Tests
 
