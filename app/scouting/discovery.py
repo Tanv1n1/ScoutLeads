@@ -16,7 +16,7 @@ import httpx
 from app.common.net import random_user_agent, random_delay, get_httpx_proxy
 from app.enrichment.lead import LeadEnricher
 from app.enrichment.sources import search as web
-from app.common.text import EMAIL_RE
+from app.common.text import emails_in, phones_in
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +121,8 @@ def analyze_site(root: str, enricher: LeadEnricher) -> Optional[Dict]:
     emails, phone = set(), None
     for html in pages.values():
         html = re.sub(r'\\u00[0-9a-fA-F]{2}', ' ', htmllib.unescape(html))
-        emails.update(e for e in re.findall(EMAIL_RE, html)
-                      if enricher._is_valid_email(e))
-        phone = phone or enricher._extract_phone_from_text(html)
+        emails.update(emails_in(html))
+        phone = phone or next(iter(phones_in(html)), None)
 
     domain = urlparse(root).netloc.lower().replace('www.', '')
     own = [e for e in emails if e.lower().endswith('@' + domain)]

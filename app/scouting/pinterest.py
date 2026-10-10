@@ -10,13 +10,13 @@ Features:
 - Extracts email and phone from bio text
 """
 
-import requests
+import httpx
 from typing import Dict, Optional
 import logging
 import re
 import json
 
-from app.common.net import random_user_agent, get_requests_proxies
+from app.common.net import random_user_agent, get_httpx_proxy
 from app.common.text import extract_email
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ def scrape_profile(username: str) -> Optional[Dict]:
     }
 
     try:
-        r = requests.get(url, headers=headers, timeout=20, proxies=get_requests_proxies())
+        r = httpx.get(url, headers=headers, timeout=20, proxy=get_httpx_proxy(), follow_redirects=True)
 
         if r.status_code == 404:
             logger.error(f"Pinterest user {username} not found")
@@ -58,10 +58,10 @@ def scrape_profile(username: str) -> Optional[Dict]:
 
         return _extract_profile_data(html, username)
 
-    except requests.exceptions.Timeout:
+    except httpx.TimeoutException:
         logger.error(f"Timeout fetching Pinterest profile {username}")
         return None
-    except requests.exceptions.RequestException as e:
+    except httpx.HTTPError as e:
         logger.error(f"Error fetching Pinterest profile {username}: {e}")
         return None
 

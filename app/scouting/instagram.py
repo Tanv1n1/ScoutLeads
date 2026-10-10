@@ -2,7 +2,7 @@
 Instagram Profile Scraper
 
 Scrapes public Instagram profiles by parsing the HTML page directly.
-Uses mobile user agents and rotating residential proxies to avoid rate limits.
+Uses mobile user agents and an optional proxy (SCOUT_PROXY) to avoid rate limits.
 
 Features:
 - Extracts follower/following counts, bio, verification status, etc.
@@ -11,13 +11,13 @@ Features:
 - No authentication required (public profiles only)
 """
 
-import requests
+import httpx
 from typing import Dict, Optional
 import logging
 import re
 
-from app.common.net import get_requests_proxies
-from app.common.text import extract_email, extract_phone, parse_abbreviated_number
+from app.common.net import get_httpx_proxy
+from app.common.text import extract_email, parse_abbreviated_number, phones_in
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def scrape_profile_no_login(username: str, max_retries: int = 3) -> Optional[Dic
     url = f'https://www.instagram.com/{username}/'
 
     for attempt in range(max_retries):
-        proxies = get_requests_proxies()
+        proxy = get_httpx_proxy()
 
         headers = {
             'User-Agent': random.choice(MOBILE_USER_AGENTS),
@@ -60,7 +60,7 @@ def scrape_profile_no_login(username: str, max_retries: int = 3) -> Optional[Dic
         }
 
         try:
-            r = requests.get(url, headers=headers, proxies=proxies, timeout=20)
+            r = httpx.get(url, headers=headers, proxy=proxy, timeout=20, follow_redirects=True)
 
             if r.status_code == 404:
                 return None
@@ -80,7 +80,7 @@ def scrape_profile_no_login(username: str, max_retries: int = 3) -> Optional[Dic
             if _is_page_not_found(html):
                 return None
 
-            if '/accounts/login' in r.url or ('login' in html[:5000].lower() and 'password' in html[:5000].lower()):
+            if '/accounts/login' in str(r.url) or ('login' in html[:5000].lower() and 'password' in html[:5000].lower()):
                 return None
 
             data = _extract_profile_from_html(html, username)
@@ -95,7 +95,7 @@ def scrape_profile_no_login(username: str, max_retries: int = 3) -> Optional[Dic
 
             return None
 
-        except requests.exceptions.Timeout:
+        except httpx.TimeoutException:
             logger.debug(f"Timeout for @{username}, attempt {attempt + 1}/{max_retries}")
             if attempt < max_retries - 1:
                 time.sleep(1)
@@ -255,7 +255,7 @@ def _extract_profile_from_html(html: str, username: str) -> Optional[Dict]:
         'is_business': results.get('is_business', False),
         'website': results.get('external_url', ''),
         'email': _extract_email(bio),
-        'phone': _extract_phone(bio),
+        'phone': (phones_in(bio) or [''])[0],
         'platform': 'instagram',
         'profile_url': f'https://www.instagram.com/{username}/',
     }
@@ -263,4 +263,3 @@ def _extract_profile_from_html(html: str, username: str) -> Optional[Dict]:
 
 _parse_abbreviated_number = parse_abbreviated_number
 _extract_email = extract_email
-_extract_phone = extract_phone

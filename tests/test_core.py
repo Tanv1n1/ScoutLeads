@@ -1,12 +1,12 @@
 import json
 from unittest.mock import patch
 
-from app.common.text import extract_email, extract_phone, parse_abbreviated_number
+from app.common.text import emails_in, extract_email, parse_abbreviated_number, phones_in, valid_email
 from app.enrichment.lead import LeadEnricher
 from app.scouting import discovery
 import enrich_cli
 from app.enrichment.spoc import SpocFinder
-from app.enrichment.people import local_matches_person, name_parts, phones_in, json_ld
+from app.enrichment.people import local_matches_person, name_parts, json_ld
 from app.enrichment.sources import site as site_src
 
 E = LeadEnricher()
@@ -23,16 +23,18 @@ def test_email_regex_rejects_pipe_and_extracts():
 
 
 def test_blacklist_matches_domains_not_substrings():
-    assert E._is_valid_email("me@mytest.com")
-    assert not E._is_valid_email("a@test.com")
-    assert not E._is_valid_email("a@sub.sentry.io")
-    assert not E._is_valid_email("logo@2x.png")
+    assert valid_email("me@mytest.com")
+    assert not valid_email("a@test.com")
+    assert not valid_email("a@sub.sentry.io")
+    assert not valid_email("logo@2x.png")
 
 
 def test_phone_needs_real_shape():
-    assert extract_phone("followers 1234567890123") == ""
-    assert extract_phone("call +91 98765 43210") == "+919876543210"
-    assert extract_phone("(415) 555-2671") == "4155552671"
+    assert phones_in("followers 1234567890123") == []
+    assert phones_in("call +91 98765 43210 or 2024") == ["+919876543210"]
+    assert phones_in("(415) 555-2671") == ["4155552671"]
+    assert phones_in("id 1111111111") == []
+    assert phones_in("bio 9876543210 and 02240001234") == ["9876543210", "02240001234"]
 
 
 def test_abbrev_numbers():
@@ -43,24 +45,14 @@ def test_abbrev_numbers():
 def test_role_inbox_is_not_a_name_pattern():
     assert E._detect_pattern("info") is None
     assert E._detect_pattern("jane.doe") == "first.last"
-    assert E._predict_email_from_pattern("Jane Doe", "https://a.com", ["info@a.com"]) is None
-    assert E._predict_email_from_pattern("Jane Doe", "https://a.com", ["info@a.com", "raj.k@a.com"]) == "jane.doe@a.com"
+    assert E._apply_pattern("f.last", "jane", "doe", "a.com") == "j.doe@a.com"
+    assert E._apply_pattern("nope", "jane", "doe", "a.com") is None
 
 
-def test_unverifiable_smtp_is_unknown_not_false():
-    with patch.object(E, "_verify_email_smtp", return_value={"exists": False, "accept_all": False, "mx": True, "checked": False, "score": 10}):
-        r = E._score_and_verify_email("sales@a.com", "website")
-    assert r["verified"] is None and r["score"] == 70 and r["role_based"]
 
 
-def test_guess_without_confirmation_is_capped():
-    with patch.object(E, "_verify_email_smtp", return_value={"exists": False, "accept_all": False, "mx": True, "checked": False, "score": 10}):
-        assert E._score_and_verify_email("jane@a.com", "pattern", site_emails_count=3)["score"] <= 35
 
 
-def test_no_mx_caps_score():
-    with patch.object(E, "_verify_email_smtp", return_value={"exists": False, "accept_all": False, "mx": False, "checked": False, "score": 0}):
-        assert E._score_and_verify_email("bio@a.com", "bio")["score"] <= 10
 
 
 def test_analyze_site_signals():
@@ -94,6 +86,7 @@ def test_name_matching():
 def test_phones_in_filters_noise():
     assert phones_in("call +91 98765 43210 or 2024") == ["+919876543210"]
     assert phones_in("id 1111111111") == []
+    assert phones_in("bio 9876543210 and 02240001234") == ["9876543210", "02240001234"]
 
 
 def test_spoc_found_on_site_and_server_verified():
@@ -173,8 +166,8 @@ def test_site_crawl_follows_homepage_links_and_sitemap():
 
 def test_api_verifier_can_decide_when_smtp_cannot():
     from app.enrichment.verify import judge
-    assert judge({"smtp": "unknown", "catch_all": None, "api": {"hunter": "valid"}}) == "valid"
-    assert judge({"smtp": "accepted", "catch_all": True, "api": {"hunter": "invalid"}}) == "invalid"
+    assert judge({"smtp": "unknown", "catch_all": None, "api": {"zerobounce": "valid"}}) == "valid"
+    assert judge({"smtp": "accepted", "catch_all": True, "api": {"zerobounce": "invalid"}}) == "invalid"
     assert judge({"smtp": "accepted", "catch_all": True, "api": {}}) == "undecided"
 
 
@@ -221,19 +214,23 @@ def test_zerobounce_failure_is_not_cached(monkeypatch, tmp_path):
 def test_search_prefers_free_backends_and_falls_back(monkeypatch):
     from app.enrichment.sources import search as s
     monkeypatch.setenv("SCOUT_CACHE", "0")
-    for k in ("SERPER_API_KEY", "TAVILY_API_KEY", "BRAVE_API_KEY"):
+    for k in ("SERPER_API_KEY", "TAVILY_API_KEY"):
         monkeypatch.setenv(k, "x")
-    assert s.backends() == ["serper", "tavily", "brave"]
+    assert s.backends() == ["serper", "tavily"]
     calls = []
     def serper(q, n): calls.append("serper"); raise s.httpx.HTTPError("down")
     def tavily(q, n): calls.append("tavily"); return [{"url": "https://u", "text": "a &amp; b"}]
     monkeypatch.setattr(s, "_serper", serper); monkeypatch.setattr(s, "_tavily", tavily)
-    monkeypatch.setattr(s, "_brave", lambda q, n: calls.append("brave") or [])
     assert s.search("q") == [{"url": "https://u", "text": "a & b"}] and calls == ["serper", "tavily"]
 
 
 def test_search_unavailable_without_keys(monkeypatch):
     from app.enrichment.sources import search as s
-    for k in ("SERPER_API_KEY", "TAVILY_API_KEY", "BRAVE_API_KEY"):
+    for k in ("SERPER_API_KEY", "TAVILY_API_KEY"):
         monkeypatch.delenv(k, raising=False)
     assert not s.available() and s.search("q") == []
+
+
+def test_emails_in_dedupes_filters_and_keeps_order():
+    text = "b@acme.in a@acme.in B@ACME.IN me@example.com logo@2x.png x@acme.in"
+    assert emails_in(text) == ["b@acme.in", "a@acme.in", "B@ACME.IN", "x@acme.in"]

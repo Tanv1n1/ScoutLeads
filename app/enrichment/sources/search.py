@@ -1,9 +1,8 @@
 """Web search. Backends are tried in order until one returns results; results are cached.
 
-Order puts the ones with no-card free tiers first:
+Backends are tried in order:
   SERPER_API_KEY   serper.dev   (2,500 free queries at signup, no card)
   TAVILY_API_KEY   tavily.com   (1,000 free credits a month, no card)
-  BRAVE_API_KEY    brave.com    (billing required)
 """
 
 import html as htmllib
@@ -17,7 +16,7 @@ from app.common import cache
 
 logger = logging.getLogger(__name__)
 
-KEYS = (('serper', 'SERPER_API_KEY'), ('tavily', 'TAVILY_API_KEY'), ('brave', 'BRAVE_API_KEY'))
+KEYS = (('serper', 'SERPER_API_KEY'), ('tavily', 'TAVILY_API_KEY'))
 
 
 def backends() -> List[str]:
@@ -42,19 +41,11 @@ def _tavily(q: str, limit: int) -> List[Dict]:
     return [{'url': x['url'], 'text': f"{x.get('title', '')} {x.get('content', '')}"} for x in r.json().get('results', [])]
 
 
-def _brave(q: str, limit: int) -> List[Dict]:
-    r = httpx.get('https://api.search.brave.com/res/v1/web/search', params={'q': q, 'count': min(limit, 20)},
-                  headers={'X-Subscription-Token': os.environ['BRAVE_API_KEY'], 'Accept': 'application/json'}, timeout=15)
-    r.raise_for_status()
-    return [{'url': x['url'], 'text': f"{x.get('title', '')} {x.get('description', '')}"}
-            for x in r.json().get('web', {}).get('results', [])]
-
-
 def search(query: str, limit: int = 8) -> List[Dict]:
     cached = cache.get('search:' + query)
     if cached is not None:
         return cached
-    fns = {'serper': _serper, 'tavily': _tavily, 'brave': _brave}
+    fns = {'serper': _serper, 'tavily': _tavily}
     for name in backends():
         try:
             res = fns[name](query, limit)

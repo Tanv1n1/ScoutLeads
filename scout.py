@@ -56,28 +56,18 @@ from rich.prompt import Prompt, Confirm
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich import box
-from rich.text import Text
 from rich.theme import Theme
 from rich.rule import Rule
 
 from app.scouting.instagram import scrape_profile_no_login
-from app.common.net import random_delay, proxy_status
+from app.common.net import random_delay, get_httpx_proxy
 
 ACCENT = "#a70947"
 ACCENT_DIM = "#6b0530"
 ACCENT_LIGHT = "#d64d7a"
 ACCENT_MUTED = "#4a0727"
 
-_GRAD_START = (255, 107, 157)
-_GRAD_END = (167, 9, 71)
 
-_LOGO_LINES = [
-    "███████  ██████  ██████  ██  ██ ████████",
-    "██      ██      ██    ██ ██  ██    ██   ",
-    "███████ ██      ██    ██ ██  ██    ██   ",
-    "     ██ ██      ██    ██ ██  ██    ██   ",
-    "███████  ██████  ██████   ████     ██   ",
-]
 
 _session_stats = {"scraped": 0}
 custom_theme = Theme({
@@ -108,88 +98,69 @@ def _update_env(key, value):
     os.environ[key] = value
 
 
+LINK_HOSTS = ('linktr.ee', 'instagram.com', 'tiktok.com', 'youtube.com', 'youtu.be', 'twitter.com', 'x.com',
+              'facebook.com', 'stan.store', 'beacons.ai', 'bit.ly', 'spotify.com')
+
+
+def _spoc_from_profile(p):
+    site = p.get('website') or ''
+    if any(h in site.lower() for h in LINK_HOSTS):
+        site = ''                        # a link-in-bio page is not the person's company site
+    return {'lead_id': p.get('username'), 'name': p.get('full_name', ''), 'role': p.get('headline', ''),
+            'website': site, 'email': p.get('email', ''), 'phone': p.get('phone', '')}
+
+
 def enrich_profiles(profiles):
+    """Complete and verify each scraped lead's email/phone with the same engine enrich_cli.py uses."""
     if not profiles:
         return profiles
 
     if not Confirm.ask("\n[white][+] Enrich leads with contact info?[/white]", default=True):
         return profiles
 
-    from app.enrichment.lead import LeadEnricher
-    hunter_key = os.environ.get('HUNTER_API_KEY', '').strip() or None
-    enricher = LeadEnricher(hunter_api_key=hunter_key)
+    from concurrent.futures import ThreadPoolExecutor
+    from app.enrichment.spoc import SpocFinder
+    finder = SpocFinder()
 
     console.print()
-    emails_found = 0
-    phones_found = 0
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
         task = progress.add_task("[white]Enriching leads...", total=len(profiles))
-
-        from concurrent.futures import ThreadPoolExecutor
-        had = [(bool(p.get('email')), bool(p.get('phone'))) for p in profiles]
 
         def _one(p):
             try:
-                return enricher.enrich_lead(p)
+                r = finder.find(_spoc_from_profile(p))
             except Exception as ex:
                 logging.getLogger(__name__).debug(f"enrich failed: {ex}")
                 return p
             finally:
                 progress.advance(task)
+            email = r['email'] or p.get('email', '')
+            status = r['email_status'] if r['email'] else ('UNVERIFIED' if email else 'NOT_FOUND')
+            return {**p, 'email': email, 'email_status': status, 'email_confidence': r['email_confidence'],
+                    'email_sources': ','.join(r['email_sources']), 'phone': r['phone'] or p.get('phone', ''),
+                    'phone_scope': r['phone_scope'], 'enrichment_gaps': ','.join(r['gaps'])}
 
         with ThreadPoolExecutor(max_workers=4) as ex:
             enriched = list(ex.map(_one, profiles))
-        for (he, hp), r in zip(had, enriched):
-            emails_found += bool(r.get('email')) and not he
-            phones_found += bool(r.get('phone')) and not hp
 
     console.print()
-
-    summary_parts = []
-    if emails_found:
-        summary_parts.append(f"[green]{emails_found} emails found[/green]")
-    if phones_found:
-        summary_parts.append(f"[green]{phones_found} phones found[/green]")
-    if not summary_parts:
-        summary_parts.append("[yellow]No new contact info found[/yellow]")
-
-    scores = [e.get('lead_score', 0) for e in enriched]
-    avg_score = sum(scores) // len(scores) if scores else 0
-    summary_parts.append(f"[white]Avg lead score: {avg_score}/100[/white]")
-
+    verified = sum(e.get('email_status') == 'VERIFIED' for e in enriched)
+    emails = sum(bool(e.get('email')) for e in enriched)
+    phones = sum(bool(e.get('phone')) for e in enriched)
     console.print(Rule("[bold white]Enrichment[/bold white]", style=ACCENT_DIM, align="left"))
-    console.print()
-    for part in summary_parts:
-        console.print(f"  {part}")
-    console.print()
+    console.print(f"\n  [green]{emails} emails ({verified} verified)[/green]  [green]{phones} phones[/green]  "
+                  f"[dim]of {len(enriched)} leads[/dim]\n")
 
     email_leads = [e for e in enriched if e.get('email')]
     if email_leads:
         t = Table(show_header=True, box=box.MINIMAL_HEAVY_HEAD, border_style="dim", padding=(0, 1))
-        t.add_column("Lead", style="white")
-        t.add_column("Email", style="white")
-        t.add_column("Confidence", style="green")
-        t.add_column("Source", style="dim")
-        t.add_column("Verified", style="yellow")
-
+        for col in ("Lead", "Email", "Status", "Confidence", "Sources"):
+            t.add_column(col, style="dim" if col == "Sources" else "white")
         for e in email_leads:
-            name = e.get('full_name') or e.get('username', '?')
-            email_score = e.get('email_score', 0)
-            score_color = 'green' if email_score >= 70 else 'yellow' if email_score >= 40 else 'red'
-            verified = 'Yes' if e.get('email_verified') else 'No'
-            t.add_row(
-                name[:25],
-                e['email'],
-                f"[{score_color}]{email_score}%[/{score_color}]",
-                e.get('email_source', '?'),
-                verified
-            )
-
+            conf = e.get('email_confidence', 0)
+            color = 'green' if conf >= 80 else 'yellow' if conf >= 50 else 'red'
+            t.add_row((e.get('full_name') or e.get('username', '?'))[:25], e['email'], e.get('email_status', '?'),
+                      f"[{color}]{conf}%[/{color}]", e.get('email_sources', ''))
         console.print(t)
 
     return enriched
@@ -284,71 +255,14 @@ def _pause():
     Prompt.ask("[dim]Press Enter to continue[/dim]", default="")
 
 
-def _gradient_line(text: str, row: int, total_rows: int) -> Text:
-    """Apply a per-character color gradient across a line of text.
-    Row position shifts the gradient vertically (top rows lighter, bottom darker)."""
-    t = Text()
-    length = len(text.rstrip())
-    row_shift = row / max(total_rows - 1, 1)
-
-    for j, char in enumerate(text):
-        if j < length and char != ' ':
-            h_progress = j / max(length - 1, 1)
-            progress = h_progress * 0.6 + row_shift * 0.4
-            progress = max(0.0, min(1.0, progress))
-
-            r = int(_GRAD_START[0] + (_GRAD_END[0] - _GRAD_START[0]) * progress)
-            g = int(_GRAD_START[1] + (_GRAD_END[1] - _GRAD_START[1]) * progress)
-            b = int(_GRAD_START[2] + (_GRAD_END[2] - _GRAD_START[2]) * progress)
-            t.append(char, style=f"bold #{r:02x}{g:02x}{b:02x}")
-        else:
-            t.append(char)
-    return t
-
-
-def _gradient_bar() -> Text:
-    """Create a thin gradient bar spanning the terminal width."""
-    width = min(console.width, 80)
-    t = Text()
-    for j in range(width):
-        progress = j / max(width - 1, 1)
-        r = int(_GRAD_START[0] + (_GRAD_END[0] - _GRAD_START[0]) * progress)
-        g = int(_GRAD_START[1] + (_GRAD_END[1] - _GRAD_START[1]) * progress)
-        b = int(_GRAD_START[2] + (_GRAD_END[2] - _GRAD_START[2]) * progress)
-        t.append("▀", style=f"#{r:02x}{g:02x}{b:02x}")
-    return t
-
-
 def show_header():
-    console.print()
-    console.print(_gradient_bar(), justify="center")
-    console.print()
-
-    total = len(_LOGO_LINES)
-    for i, line in enumerate(_LOGO_LINES):
-        t = _gradient_line(line, i, total)
-        console.print(t, justify="center")
-
-    console.print()
-    console.print(f"[dim]v{__version__}[/dim]  [white]Lead Scouting & Enrichment[/white]", justify="center")
-
-    console.print()
-    console.print(_gradient_bar(), justify="center")
-
-    ps = proxy_status()
-    if ps == 'custom':
-        proxy_str = "[green]● custom[/green]"
-    elif ps == 'file':
-        proxy_str = "[green]● rotating[/green]"
-    elif ps == 'free':
-        proxy_str = "[yellow]● free[/yellow]"
-    else:
-        proxy_str = "[dim]○ off[/dim]"
-
+    proxy_str = "[green]● on[/green]" if get_httpx_proxy() else "[dim]○ off[/dim]"
     status = f"[dim]github.com/Tanv1n1/ScoutLeads[/dim]  ·  [dim]Proxy:[/dim] {proxy_str}"
     if _session_stats["scraped"] > 0:
         status += f"  ·  [dim]Scraped:[/dim] [white]{_session_stats['scraped']}[/white]"
-    console.print(status, justify="center")
+    console.print()
+    console.print(f"[bold {ACCENT}]SCOUT[/bold {ACCENT}]  [dim]v{__version__}  lead scouting & enrichment[/dim]")
+    console.print(status)
     console.print()
 
 
@@ -870,122 +784,46 @@ def discover_interactive():
 def settings_menu():
     _platform_header("Settings", "Configure Scout")
 
-    ps = proxy_status()
-    current_proxy = os.environ.get('SCOUT_PROXY', '')
-    free_enabled = os.environ.get('SCOUT_FREE_PROXY', '').lower() in ('1', 'true', 'yes')
-    proxy_file = os.environ.get('SCOUT_PROXY_FILE', '')
+    proxy = os.environ.get('SCOUT_PROXY', '')
     delay_min = os.environ.get('SCOUT_DELAY_MIN', '1.0')
     delay_max = os.environ.get('SCOUT_DELAY_MAX', '2.5')
     li_cookie = os.environ.get('LINKEDIN_COOKIE', '').strip()
 
-    proxy_str = f"[green]{ps}[/green]" if ps != 'none' else "[red]off[/red]"
-    if current_proxy:
-        proxy_str += f"  [dim]{current_proxy[:40]}[/dim]"
-    elif proxy_file:
-        proxy_str += f"  [dim]{proxy_file[:40]}[/dim]"
-
-    console.print(f"  [dim]Proxy:[/dim]     {proxy_str}")
-    console.print(f"  [dim]Free proxy:[/dim] [green]on[/green]" if free_enabled else f"  [dim]Free proxy:[/dim] [dim]off[/dim]")
+    console.print(f"  [dim]Proxy:[/dim]     [green]{proxy[:40]}[/green]" if proxy else "  [dim]Proxy:[/dim]     [red]off[/red]")
     console.print(f"  [dim]Delay:[/dim]     [white]{delay_min}s - {delay_max}s[/white]")
-    console.print(f"  [dim]LinkedIn:[/dim]  [green]cookie set[/green]" if li_cookie else f"  [dim]LinkedIn:[/dim]  [dim]not configured[/dim]")
+    console.print(f"  [dim]LinkedIn:[/dim]  [green]cookie set[/green]" if li_cookie else "  [dim]LinkedIn:[/dim]  [dim]not configured[/dim]")
     console.print(f"  [dim]Scraped:[/dim]   [white]{_session_stats['scraped']}[/white] [dim]this session[/dim]")
     console.print()
 
-    console.print(Rule("[bold white]Proxy[/bold white]", style=ACCENT_DIM, align="left"))
-    console.print()
-    console.print(f"  [{ACCENT}][1][/{ACCENT}]  Set proxy URL")
-    console.print(f"  [{ACCENT}][2][/{ACCENT}]  Set proxy file")
-    console.print(f"  [{ACCENT}][3][/{ACCENT}]  Toggle free proxy")
-    console.print(f"  [{ACCENT}][4][/{ACCENT}]  Test connection")
-    console.print(f"  [{ACCENT}][5][/{ACCENT}]  Remove proxy")
+    for n, label in (("1", "Set proxy URL"), ("2", "Test connection"), ("3", "Remove proxy"),
+                     ("4", "Set scrape delay"), ("5", "Set LinkedIn cookie"), ("6", "Clear all exports"), ("0", "Back to menu")):
+        console.print(f"  [{ACCENT}][{n}][/{ACCENT}]  {label}")
     console.print()
 
-    console.print(Rule("[bold white]Scraping[/bold white]", style=ACCENT_DIM, align="left"))
-    console.print()
-    console.print(f"  [{ACCENT}][6][/{ACCENT}]  Set scrape delay")
-    console.print(f"  [{ACCENT}][7][/{ACCENT}]  Set LinkedIn cookie")
-    console.print()
-
-    console.print(Rule("[bold white]Data[/bold white]", style=ACCENT_DIM, align="left"))
-    console.print()
-    console.print(f"  [{ACCENT}][8][/{ACCENT}]  Clear all exports")
-    console.print(f"  [{ACCENT}][0][/{ACCENT}]  Back to menu")
-    console.print()
-
-    choice = Prompt.ask(f"[{ACCENT}]>[/{ACCENT}]", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8"], default="0")
-
-    import httpx as _httpx
+    choice = Prompt.ask(f"[{ACCENT}]>[/{ACCENT}]", choices=["0", "1", "2", "3", "4", "5", "6"], default="0")
 
     if choice == '1':
         url = Prompt.ask("[>] Proxy URL (e.g. http://user:pass@host:port)")
         if url.strip():
             _update_env('SCOUT_PROXY', url.strip())
-            console.print(f"[green]✓ Proxy set[/green]")
+            console.print("[green]✓ Proxy set[/green]")
 
     elif choice == '2':
-        filepath = Prompt.ask("[>] Path to proxy list file")
-        if filepath.strip():
-            if os.path.exists(filepath.strip()):
-                _update_env('SCOUT_PROXY_FILE', filepath.strip())
-                console.print(f"[green]✓ Proxy file set[/green]")
-            else:
-                console.print(f"[red]✗ File not found: {filepath.strip()}[/red]")
+        import httpx
+        px = get_httpx_proxy()
+        console.print(f"[white]Testing {'proxy ' + px[:60] if px else 'direct connection'}...[/white]")
+        try:
+            ip = httpx.get('https://httpbin.org/ip', proxy=px, timeout=10).json().get('origin', '?')
+            console.print(f"[green]✓ Works. IP: {ip}[/green]")
+        except Exception as e:
+            console.print(f"[red]✗ Failed: {str(e)[:80]}[/red]")
 
     elif choice == '3':
-        if free_enabled:
-            _update_env('SCOUT_FREE_PROXY', 'false')
-            console.print("[yellow]✓ Free proxy disabled[/yellow]")
-        else:
-            _update_env('SCOUT_FREE_PROXY', 'true')
-            console.print("[green]✓ Free proxy enabled[/green]")
-
-    elif choice == '4':
-        console.print("[white]Testing connection...[/white]")
-        from app.common.net import get_proxy
-        px = get_proxy()
-        if not px:
-            console.print("[dim]No proxy configured, testing direct...[/dim]")
-            try:
-                resp = _httpx.get('https://httpbin.org/ip', timeout=10)
-                ip = resp.json().get('origin', '?')
-                console.print(f"[green]✓ Direct connection works. IP: {ip}[/green]")
-            except Exception as e:
-                console.print(f"[red]✗ Connection failed: {str(e)[:80]}[/red]")
-        else:
-            console.print(f"[dim]Trying: {px[:60]}[/dim]")
-            proxy_url = px if px.startswith('http') else f'http://{px}'
-            try:
-                resp = _httpx.get('https://httpbin.org/ip', proxy=proxy_url, timeout=10, verify=False)
-                ip = resp.json().get('origin', '?')
-                console.print(f"[green]✓ Proxy works! IP: {ip}[/green]")
-            except Exception as e:
-                console.print(f"[red]✗ Proxy failed: {str(e)[:80]}[/red]")
-                if free_enabled:
-                    console.print("[yellow]Free proxies are unreliable. Trying others...[/yellow]")
-                    from app.common.net import _fetch_free_proxies
-                    proxies = _fetch_free_proxies()
-                    for p in proxies[:3]:
-                        p_url = p if p.startswith('http') else f'http://{p}'
-                        console.print(f"[dim]Trying: {p_url[:60]}[/dim]")
-                        try:
-                            resp = _httpx.get('https://httpbin.org/ip', proxy=p_url, timeout=8, verify=False)
-                            ip = resp.json().get('origin', '?')
-                            console.print(f"[green]✓ Found working proxy! IP: {ip}[/green]")
-                            break
-                        except Exception:
-                            console.print(f"[red]✗ Dead[/red]")
-                    else:
-                        console.print("[red]All free proxies failed. Use a paid proxy.[/red]")
-
-    elif choice == '5':
         _update_env('SCOUT_PROXY', '')
-        _update_env('SCOUT_FREE_PROXY', 'false')
-        _update_env('SCOUT_PROXY_FILE', '')
         os.environ.pop('SCOUT_PROXY', None)
-        os.environ.pop('SCOUT_PROXY_FILE', None)
         console.print("[yellow]✓ Proxy removed[/yellow]")
 
-    elif choice == '6':
+    elif choice == '4':
         console.print(f"[dim]Current: {delay_min}s - {delay_max}s between requests[/dim]")
         new_min = Prompt.ask("[>] Min delay (seconds)", default=delay_min)
         new_max = Prompt.ask("[>] Max delay (seconds)", default=delay_max)
@@ -1000,7 +838,7 @@ def settings_menu():
         except ValueError:
             console.print("[red]✗ Must be numbers[/red]")
 
-    elif choice == '7':
+    elif choice == '5':
         console.print("[white]Paste your LinkedIn li_at cookie value:[/white]")
         console.print("[dim]Chrome > F12 > Application > Cookies > linkedin.com > li_at[/dim]")
         cookie = Prompt.ask("[>] li_at", default="")
@@ -1008,7 +846,7 @@ def settings_menu():
             _update_env('LINKEDIN_COOKIE', cookie.strip())
             console.print("[green]✓ LinkedIn cookie saved[/green]")
 
-    elif choice == '8':
+    elif choice == '6':
         csv_files = list(Path('.').glob('*_export_*.csv'))
         if not csv_files:
             console.print("[yellow]No exports to clear[/yellow]")
@@ -1018,7 +856,6 @@ def settings_menu():
                 for f in csv_files:
                     f.unlink()
                 console.print(f"[green]✓ Deleted {len(csv_files)} exports[/green]")
-
 
 
 def view_exports():

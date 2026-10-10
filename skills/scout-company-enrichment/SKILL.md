@@ -15,7 +15,7 @@ python enrich_cli.py spocs.json out.json --batch 10 --no-smtp # if port 25 is bl
 Input per SPOC: `{"lead_id","name","role","company","domain","email","phone"}` (name and domain or website are required; without a domain the gap `domain_unresolved` is returned).
 
 ## Sources it checks (in order)
-provided values; the company site (team/leadership/about links found on the homepage and sitemap, plus schema.org data); web search (`SERPER_API_KEY`, `TAVILY_API_KEY` or `BRAVE_API_KEY`; first available, falls back to the next); Hunter (`HUNTER_API_KEY`); then pattern guesses confirmed by the mail server or a verifier. Verifiers: SMTP (free), then ZeroBounce (`ZEROBOUNCE_API_KEY`, one credit per address; Hunter is the fallback). No social-network scraping.
+provided values; the company site (team/leadership/about links found on the homepage and sitemap, plus schema.org data); web search (`SERPER_API_KEY` and/or `TAVILY_API_KEY`; first available, falls back to the other); Hunter (`HUNTER_API_KEY`); then pattern guesses confirmed by the mail server or a verifier. Verifiers: SMTP (free), then ZeroBounce (`ZEROBOUNCE_API_KEY`, one credit per address). No social-network scraping.
 
 ## Reading the result
 | `email_status` | Meaning | Use as |
