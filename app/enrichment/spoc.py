@@ -14,7 +14,7 @@ Sources (each independent, so agreement between them is real evidence):
   hunter      Hunter email-finder
   pattern     address built from the domain's observed pattern / common patterns,
               accepted only if the mail server (or a verifier API) confirms it
-Verification: MX + SMTP with catch-all probe, then Hunter when SMTP cannot decide.
+Verification: MX + SMTP with catch-all probe, then ZeroBounce (Hunter as fallback).
 """
 
 import logging
@@ -216,12 +216,16 @@ class SpocFinder:
         # verify + rank (person-level candidates and guesses; verify at most 8)
         pool = [g for g in grouped.values() if g['kind'] in ('person', 'guess')][:8]
         ranked = []
+        guess_confirmed = False
         for g in pool:
+            if g['kind'] == 'guess' and guess_confirmed:
+                break                            # one confirmed guess is enough; don't spend more checks
             v = self.verify(g['email'])
             n_indep = len({s for s in g['sources'] if s != 'pattern'})
             status = self._status(v, n_indep, g['kind'])
             if g['kind'] == 'guess' and status not in ('VERIFIED', 'REJECTED'):
                 status = 'UNVERIFIED'            # a guess is only usable if the server confirms it
+            guess_confirmed = guess_confirmed or (g['kind'] == 'guess' and status == 'VERIFIED')
             ranked.append({**g, 'verification': v, 'status': status, 'sources': sorted(g['sources']), 'urls': sorted(g['urls'])})
         usable = [r for r in ranked if r['status'] != 'REJECTED']
         usable.sort(key=lambda r: (STATUS_RANK.get(r['status'], 0), len(r['sources'])), reverse=True)

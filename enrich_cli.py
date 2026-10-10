@@ -5,14 +5,14 @@ SPOC contact completion CLI for agent pipelines (JSON in, JSON out, resumable).
     python enrich_cli.py spocs.json out.json [--batch 10] [--workers 3] [--state state.json] [--no-smtp]
 
 Input : [{"lead_id": "1", "name": "Jane Doe", "role": "CEO", "company": "Acme", "domain": "acme.com",
-          "email": "", "phone": ""}]        (only name + one of company/domain is required;
+          "email": "", "phone": ""}]        (name and domain (or website) are required;
                                               email/phone are kept and verified if the agent already has them)
 Output: the same SPOC with email (+ status VERIFIED | SOURCE_CONFIRMED | LIKELY | UNVERIFIED | NOT_FOUND,
         confidence, sources, verification detail), phone (+ scope person|company), other candidates,
         `gaps` listing everything still missing, and provenance.
 
 Sources: company site (+discovered team pages, sitemap, schema.org), web search (BRAVE_API_KEY),
-Hunter (HUNTER_API_KEY), pattern + SMTP; verifiers: SMTP, Hunter. No social-profile
+Hunter (HUNTER_API_KEY), pattern + SMTP; verifiers: SMTP then ZeroBounce (ZEROBOUNCE_API_KEY); Hunter as fallback. No social-profile
 scraping. Each run handles at most --batch pending SPOCs then exits, so it fits short agent sessions;
 re-run until "remaining" is 0.
 """
