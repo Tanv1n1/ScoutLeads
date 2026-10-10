@@ -27,3 +27,10 @@ exports/
 *.swp
 *.swo
 .scout_cache/
+
+# env variants with secrets (keep the template)
+.env.*
+!.env.example
+
+# batch state from enrich_cli (can contain contact data)
+*.state.json
