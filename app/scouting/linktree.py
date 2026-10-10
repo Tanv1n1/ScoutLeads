@@ -15,7 +15,7 @@ Features:
 - Can scrape all supported platforms at once via scrape_all()
 """
 
-import requests
+import httpx
 from typing import Dict, Optional, List
 import logging
 import re
@@ -71,7 +71,7 @@ def _scrape_profile(username: str, platform: str) -> Optional[Dict]:
     }
 
     try:
-        r = requests.get(url, headers=headers, timeout=20)
+        r = httpx.get(url, headers=headers, timeout=20, follow_redirects=True)
 
         if r.status_code == 404:
             logger.debug(f"{platform} user {username} not found")
@@ -90,10 +90,10 @@ def _scrape_profile(username: str, platform: str) -> Optional[Dict]:
         else:
             return _parse_generic(html, username, platform)
 
-    except requests.exceptions.Timeout:
+    except httpx.TimeoutException:
         logger.error(f"Timeout fetching {platform} profile {username}")
         return None
-    except requests.exceptions.RequestException as e:
+    except httpx.HTTPError as e:
         logger.error(f"Error fetching {platform} profile {username}: {e}")
         return None
 

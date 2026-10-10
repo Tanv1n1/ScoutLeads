@@ -25,9 +25,9 @@ from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 from app.common.net import random_delay
-from app.common.text import EMAIL_RE
+from app.common.text import emails_in, phones_in, valid_email
 from app.enrichment.lead import LeadEnricher, ROLE_LOCALS
-from app.enrichment.people import json_ld, local_matches_person, name_parts, page_text, phones_in
+from app.enrichment.people import json_ld, local_matches_person, name_parts, page_text
 from app.enrichment.sources import search as web
 from app.enrichment.sources.site import crawl
 from app.enrichment.verify import Verifier, judge
@@ -68,8 +68,8 @@ class SpocFinder:
                 windows.append((max(0, m.start() - 150), m.end() + 150))
         near = ' '.join(text[a:b] for a, b in windows)
 
-        for e in set(re.findall(EMAIL_RE, text)):
-            if not self.enr._is_valid_email(e) or not e.lower().endswith('@' + domain):
+        for e in emails_in(text):
+            if not e.lower().endswith('@' + domain):
                 continue
             local = e.split('@')[0]
             if local_matches_person(local, first, last):
@@ -93,12 +93,12 @@ class SpocFinder:
         for p in data['people']:
             pf, pl = name_parts(p['name'])
             if pf == first and (not last or pl == last):
-                if p['email'] and p['email'].endswith('@' + domain) and self.enr._is_valid_email(p['email']):
+                if p['email'] and p['email'].endswith('@' + domain) and valid_email(p['email']):
                     cands.append({'email': p['email'], 'source': 'site', 'url': url, 'kind': 'person'})
                 for ph in phones_in(p['phone']):
                     phones.append({'phone': ph, 'scope': 'person', 'source': 'site', 'url': url})
         for e in data['org_emails']:
-            if e.endswith('@' + domain) and self.enr._is_valid_email(e):
+            if e.endswith('@' + domain) and valid_email(e):
                 cands.append({'email': e, 'source': 'site', 'url': url,
                               'kind': 'role' if e.split('@')[0] in ROLE_LOCALS else 'other'})
         for ph in data['org_phones']:

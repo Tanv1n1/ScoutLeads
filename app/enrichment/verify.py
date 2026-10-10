@@ -2,7 +2,6 @@
 
 ZeroBounce (ZEROBOUNCE_API_KEY) is the primary deliverability check and costs one credit per address,
 so it is skipped for anything SMTP already proved undeliverable and every result is cached.
-Hunter's verifier (HUNTER_API_KEY) is used only when ZeroBounce is not configured or cannot decide.
 """
 
 import logging
@@ -51,12 +50,6 @@ class Verifier:
                     v['api_detail']['zerobounce'] = zb['raw']
                 else:
                     zb_failed = True
-            needs_fallback = not os.environ.get('ZEROBOUNCE_API_KEY') or v['api'].get('zerobounce') in (None, 'unknown')
-            undecided = v['smtp'] in ('unknown', 'skipped') or v['catch_all']
-            if needs_fallback and undecided and os.environ.get('HUNTER_API_KEY'):
-                h = self._hunter(email)
-                if h:
-                    v['api']['hunter'] = h
 
         if not zb_failed and (v['smtp'] != 'unknown' or v['api']):   # don't cache a transient failure
             cache.put('verify:' + email, v)
@@ -74,15 +67,6 @@ class Verifier:
             logger.warning(f"ZeroBounce gave no verdict for {email}: {str(d.get('error', d))[:120]}")
             return None
         return {'status': _ZB[status], 'raw': {'status': status, 'sub_status': d.get('sub_status', '')}}
-
-    @staticmethod
-    def _hunter(email: str):
-        try:
-            d = httpx.get('https://api.hunter.io/v2/email-verifier',
-                          params={'email': email, 'api_key': os.environ['HUNTER_API_KEY']}, timeout=25).json().get('data', {})
-            return d.get('status')                      # valid | invalid | accept_all | webmail | unknown
-        except (httpx.HTTPError, ValueError):
-            return None
 
 
 def judge(v: Dict) -> str:

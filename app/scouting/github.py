@@ -10,11 +10,11 @@ Features:
 - Extracts email from public profile fields
 """
 
-import requests
+import httpx
 from typing import Dict, Optional
 import logging
 
-from app.common.net import get_requests_proxies, random_user_agent
+from app.common.net import get_httpx_proxy, random_user_agent
 from app.common.text import extract_email
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ def scrape_profile(username: str) -> Optional[Dict]:
     }
 
     try:
-        r = requests.get(url, headers=headers, timeout=15, proxies=get_requests_proxies())
+        r = httpx.get(url, headers=headers, timeout=15, proxy=get_httpx_proxy(), follow_redirects=True)
 
         if r.status_code == 404:
             logger.error(f"GitHub user @{username} not found")
@@ -75,10 +75,10 @@ def scrape_profile(username: str) -> Optional[Dict]:
             'profile_url': data.get('html_url', f'https://github.com/{username}'),
         }
 
-    except requests.exceptions.Timeout:
+    except httpx.TimeoutException:
         logger.error(f"Timeout fetching GitHub profile @{username}")
         return None
-    except requests.exceptions.RequestException as e:
+    except httpx.HTTPError as e:
         logger.error(f"Error fetching GitHub profile @{username}: {e}")
         return None
 

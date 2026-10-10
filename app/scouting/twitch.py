@@ -10,11 +10,11 @@ Features:
 - Detects live/offline status
 """
 
-import requests
+import httpx
 from typing import Dict, Optional
 import logging
 
-from app.common.net import random_user_agent, get_requests_proxies
+from app.common.net import random_user_agent, get_httpx_proxy
 from app.common.text import extract_email
 
 logger = logging.getLogger(__name__)
@@ -62,19 +62,19 @@ def scrape_profile(username: str) -> Optional[Dict]:
     """ % username
 
     try:
-        proxies = get_requests_proxies()
+        proxy = get_httpx_proxy()
         try:
-            r = requests.post(
+            r = httpx.post(
                 'https://gql.twitch.tv/gql',
                 headers=headers,
                 json={'query': query},
                 timeout=20,
-                proxies=proxies
+                proxy=proxy
             )
-        except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
-            if proxies:
+        except (httpx.ProxyError, httpx.ConnectError) as e:
+            if proxy:
                 logger.warning(f"Proxy failed for Twitch, retrying direct: {e}")
-                r = requests.post(
+                r = httpx.post(
                     'https://gql.twitch.tv/gql',
                     headers=headers,
                     json={'query': query},
@@ -100,10 +100,10 @@ def scrape_profile(username: str) -> Optional[Dict]:
 
         return _format_profile(user_data, username)
 
-    except requests.exceptions.Timeout:
+    except httpx.TimeoutException:
         logger.error(f"Timeout fetching Twitch profile {username}")
         return None
-    except requests.exceptions.RequestException as e:
+    except httpx.HTTPError as e:
         logger.error(f"Error fetching Twitch profile {username}: {e}")
         return None
     except Exception as e:

@@ -10,12 +10,12 @@ Features:
 - No API key required
 """
 
-import requests
+import httpx
 from typing import Dict, Optional
 import logging
 import re
 
-from app.common.net import random_user_agent, get_requests_proxies
+from app.common.net import random_user_agent, get_httpx_proxy
 from app.common.text import extract_email, parse_abbreviated_number
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def scrape_channel(channel_identifier: str) -> Optional[Dict]:
     }
 
     try:
-        r = requests.get(url, headers=headers, cookies=cookies, timeout=20, proxies=get_requests_proxies())
+        r = httpx.get(url, headers=headers, cookies=cookies, timeout=20, proxy=get_httpx_proxy(), follow_redirects=True)
 
         if r.status_code == 404:
             logger.error(f"YouTube channel {channel_identifier} not found")
@@ -61,15 +61,15 @@ def scrape_channel(channel_identifier: str) -> Optional[Dict]:
             return result
 
         headers['User-Agent'] = random_user_agent()
-        r = requests.get(url, headers=headers, cookies=cookies, timeout=20, proxies=get_requests_proxies())
+        r = httpx.get(url, headers=headers, cookies=cookies, timeout=20, proxy=get_httpx_proxy(), follow_redirects=True)
         if r.status_code == 200:
             return _extract_channel_data(r.text, channel_identifier)
         return None
 
-    except requests.exceptions.Timeout:
+    except httpx.TimeoutException:
         logger.error(f"Timeout fetching YouTube channel {channel_identifier}")
         return None
-    except requests.exceptions.RequestException as e:
+    except httpx.HTTPError as e:
         logger.error(f"Error fetching YouTube channel {channel_identifier}: {e}")
         return None
 

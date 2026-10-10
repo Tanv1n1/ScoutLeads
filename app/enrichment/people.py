@@ -3,11 +3,10 @@
 import html as htmllib
 import json
 import re
-from typing import Dict, List
+from typing import Dict
 
 from app.enrichment.lead import ROLE_LOCALS
 
-PHONE_RE = re.compile(r'(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,5}\)?[\s.-]?){2,4}\d{2,5}')
 TITLES = ('mr', 'ms', 'mrs', 'dr', 'shri', 'smt', 'ca', 'cs')
 
 
@@ -36,16 +35,6 @@ def local_matches_person(local: str, first: str, last: str) -> bool:
     forms = {first, first + last, last + first, first[0] + last, first + last[0], last, last + first[0]}
     return local in forms
 
-
-def phones_in(text: str) -> List[str]:
-    out = []
-    for m in PHONE_RE.findall(text):
-        digits = re.sub(r'\D', '', m)
-        if 10 <= len(digits) <= 13 and not re.fullmatch(r'(\d)\1+', digits) and not re.match(r'(19|20)\d{2}', digits):
-            norm = ('+' if m.strip().startswith('+') else '') + digits
-            if norm not in out:
-                out.append(norm)
-    return out
 
 
 def json_ld(html: str) -> Dict:
