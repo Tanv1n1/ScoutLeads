@@ -5,7 +5,6 @@ search -> analyze site for signals -> fit score -> contact emails.
 """
 
 import html as htmllib
-import os
 import re
 import logging
 from concurrent.futures import ThreadPoolExecutor
@@ -16,6 +15,7 @@ import httpx
 
 from app.common.net import random_user_agent, random_delay, get_httpx_proxy
 from app.enrichment.lead import LeadEnricher
+from app.enrichment.sources import search as web
 from app.common.text import EMAIL_RE
 
 logger = logging.getLogger(__name__)
@@ -63,25 +63,10 @@ SIGNALS = [
 ROLE_PREFIXES = ('export', 'sales', 'finance', 'accounts', 'billing', 'ceo', 'founder', 'director', 'contact', 'info', 'hello')
 
 
-def _brave(query: str, limit: int) -> List[str]:
-    resp = httpx.get(
-        'https://api.search.brave.com/res/v1/web/search',
-        params={'q': query, 'count': min(limit, 20)},
-        headers={'X-Subscription-Token': os.environ['BRAVE_API_KEY'], 'Accept': 'application/json'},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    return [r['url'] for r in resp.json().get('web', {}).get('results', [])]
-
-
 def search(query: str, limit: int = 10) -> List[str]:
-    """Brave API if BRAVE_API_KEY is set, else best-effort DuckDuckGo HTML (often bot-challenged)."""
-    if os.environ.get('BRAVE_API_KEY'):
-        try:
-            return _brave(query, limit)
-        except (httpx.HTTPError, KeyError, ValueError) as e:
-            logger.warning(f"Brave search failed: {e}")
-            return []
+    """Shared API search if any key is set (SERPER / TAVILY / BRAVE), else best-effort DuckDuckGo (often bot-challenged)."""
+    if web.available():
+        return [r['url'] for r in web.search(query, limit)]
     try:
         resp = httpx.post(
             'https://html.duckduckgo.com/html/',

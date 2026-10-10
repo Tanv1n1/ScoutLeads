@@ -830,6 +830,7 @@ def scrape_from_file():
 
 def discover_interactive():
     from app.scouting.discovery import discover, QUERY_TEMPLATES
+    from app.enrichment.sources import search as web_search
     _platform_header("Discover", "Cross-border / recurring-payment businesses")
     cats = list(QUERY_TEMPLATES)
     for i, c in enumerate(cats, 1):
@@ -839,8 +840,8 @@ def discover_interactive():
     geo = Prompt.ask("[>] Region", default="India")
     per_q = int(Prompt.ask("[>] Results per search", default="10"))
     seed = None
-    if not os.environ.get('BRAVE_API_KEY'):
-        console.print("[yellow]No BRAVE_API_KEY set; web search is often blocked. You can paste domains instead.[/yellow]")
+    if not web_search.available():
+        console.print("[yellow]No search API key set (SERPER_API_KEY / TAVILY_API_KEY / BRAVE_API_KEY); web search is often blocked. You can paste domains instead.[/yellow]")
         raw_seed = Prompt.ask("[>] Domains (comma-separated) or Enter to try search anyway", default="")
         seed = [d.strip() for d in raw_seed.split(',') if d.strip()] or None
 

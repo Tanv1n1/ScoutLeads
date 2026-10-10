@@ -10,7 +10,7 @@ Sources (each independent, so agreement between them is real evidence):
   provided    what the caller already has (verified, never trusted blindly)
   site        company site: fixed team/contact paths + links found on the homepage + sitemap,
               reading mailto/tel links, schema.org Person/Organization data and text near the name
-  web_search  Brave results and the pages they point to (social networks never fetched)
+  web_search  Serper / Tavily / Brave results and the pages they point to (social networks never fetched)
   hunter      Hunter email-finder
   pattern     address built from the domain's observed pattern / common patterns,
               accepted only if the mail server (or a verifier API) confirms it
@@ -185,9 +185,9 @@ class SpocFinder:
                             self._harvest(page_text(page), 'web_search', res['url'], name, domain, first, last, cands, phones)
                             self._harvest_schema(page, res['url'], domain, first, last, cands, phones)
                 random_delay(0.5, 1.2)
-            out['sources_checked'].append(f'web_search({len(seen_urls)} pages)')
+            out['sources_checked'].append(f"web_search[{'+'.join(web.backends())}]({len(seen_urls)} pages)")
         else:
-            out['gaps'].append('web_search_skipped_no_BRAVE_API_KEY' if first else 'web_search_skipped_no_name')
+            out['gaps'].append('web_search_skipped_no_search_key' if first else 'web_search_skipped_no_name')
 
         # hunter
         if self.enr.hunter_api_key and first and last:
