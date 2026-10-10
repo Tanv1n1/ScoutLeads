@@ -2,7 +2,7 @@
 """
 SPOC contact completion CLI for agent pipelines (JSON in, JSON out, resumable).
 
-    python enrich_cli.py spocs.json out.json [--batch 10] [--state state.json] [--no-smtp]
+    python enrich_cli.py spocs.json out.json [--batch 10] [--workers 3] [--state state.json] [--no-smtp]
 
 Input : [{"lead_id": "1", "name": "Jane Doe", "role": "CEO", "company": "Acme", "domain": "acme.com",
           "email": "", "phone": ""}]        (only name + one of company/domain is required;
@@ -11,7 +11,8 @@ Output: the same SPOC with email (+ status VERIFIED | SOURCE_CONFIRMED | LIKELY 
         confidence, sources, verification detail), phone (+ scope person|company), other candidates,
         `gaps` listing everything still missing, and provenance.
 
-Sources: company site, web search (BRAVE_API_KEY), Hunter (HUNTER_API_KEY), pattern + SMTP. No social-profile
+Sources: company site (+discovered team pages, sitemap, schema.org), web search (BRAVE_API_KEY / SERPER_API_KEY),
+Hunter (HUNTER_API_KEY), pattern + SMTP; verifiers: SMTP, Hunter, ZeroBounce (ZEROBOUNCE_API_KEY). No social-profile
 scraping. Each run handles at most --batch pending SPOCs then exits, so it fits short agent sessions;
 re-run until "remaining" is 0.
 """
@@ -19,9 +20,11 @@ re-run until "remaining" is 0.
 import argparse
 import json
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from app.spoc import SpocFinder
+from app.enrichment.spoc import SpocFinder
 
 
 def enrich_one(spoc: dict, finder: SpocFinder) -> dict:
@@ -34,6 +37,7 @@ def main(argv=None) -> int:
     ap.add_argument('output')
     ap.add_argument('--batch', type=int, default=10, help='max SPOCs per run (default 10)')
     ap.add_argument('--state', default=None, help='state file (default: <output>.state.json)')
+    ap.add_argument('--workers', type=int, default=3, help='SPOCs processed in parallel (default 3)')
     ap.add_argument('--no-smtp', action='store_true', help='skip MX/SMTP checks (use when port 25 is blocked)')
     a = ap.parse_args(argv)
 
@@ -44,12 +48,22 @@ def main(argv=None) -> int:
 
     pending = [s for s in spocs if str(s.get('lead_id')) not in done]
     finder = SpocFinder(smtp=not a.no_smtp)
-    for spoc in pending[:a.batch]:
+    lock = threading.Lock()
+
+    def work(spoc):
         key = str(spoc.get('lead_id'))
-        results[key] = enrich_one(spoc, finder)
-        done.add(key)
-        out_path.write_text(json.dumps(list(results.values()), indent=2))   # persist after every SPOC
-        state_path.write_text(json.dumps(sorted(done)))
+        try:
+            res = enrich_one(spoc, finder)
+        except Exception as e:                        # one bad record must not lose the batch
+            res = {'lead_id': spoc.get('lead_id'), 'email': '', 'email_status': 'ERROR', 'gaps': [f'error:{type(e).__name__}']}
+        with lock:
+            results[key] = res
+            done.add(key)
+            out_path.write_text(json.dumps(list(results.values()), indent=2))   # persist after every SPOC
+            state_path.write_text(json.dumps(sorted(done)))
+
+    with ThreadPoolExecutor(max_workers=max(a.workers, 1)) as ex:
+        list(ex.map(work, pending[:a.batch]))
 
     print(json.dumps({'processed': min(len(pending), a.batch), 'remaining': max(len(pending) - a.batch, 0), 'output': str(out_path)}))
     return 0

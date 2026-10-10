@@ -61,8 +61,8 @@ from rich.text import Text
 from rich.theme import Theme
 from rich.rule import Rule
 
-from app.scrapers.instagram import scrape_profile_no_login
-from app.scrapers.stealth import random_delay, proxy_status
+from app.scouting.instagram import scrape_profile_no_login
+from app.common.net import random_delay, proxy_status
 
 ACCENT = "#a70947"
 ACCENT_DIM = "#6b0530"
@@ -166,7 +166,7 @@ def enrich_profiles(profiles):
     if not Confirm.ask("\n[white][+] Enrich leads with contact info?[/white]", default=True):
         return profiles
 
-    from app.scrapers.enrichment import LeadEnricher
+    from app.enrichment.lead import LeadEnricher
     hunter_key = os.environ.get('HUNTER_API_KEY', '').strip() or None
     enricher = LeadEnricher(hunter_api_key=hunter_key)
 
@@ -576,7 +576,7 @@ def scrape_instagram_interactive():
 
 
 def scrape_tiktok_interactive():
-    from app.scrapers.tiktok import scrape_tiktok_profile
+    from app.scouting.tiktok import scrape_tiktok_profile
     _platform_header("TikTok")
     usernames = _collect_usernames("TikTok", strip_at=True)
     if not usernames:
@@ -587,7 +587,7 @@ def scrape_tiktok_interactive():
 
 
 def scrape_linkedin_interactive():
-    from app.scrapers.linkedin import scrape_linkedin_profile
+    from app.scouting.linkedin import scrape_linkedin_profile
 
     cookie = os.environ.get('LINKEDIN_COOKIE', '').strip()
     if not cookie:
@@ -631,7 +631,7 @@ def scrape_linkedin_interactive():
 
 
 def scrape_github_interactive():
-    from app.scrapers.github import scrape_profile
+    from app.scouting.github import scrape_profile
     _platform_header("GitHub")
     usernames = _collect_usernames("GitHub")
     if not usernames:
@@ -642,7 +642,7 @@ def scrape_github_interactive():
 
 
 def scrape_youtube_interactive():
-    from app.scrapers.youtube import scrape_channel
+    from app.scouting.youtube import scrape_channel
     _platform_header("YouTube")
 
     console.print("[white]Enter YouTube channel handles (e.g. @MrBeast) or channel IDs[/white]")
@@ -669,7 +669,7 @@ def scrape_youtube_interactive():
 
 
 def scrape_twitch_interactive():
-    from app.scrapers.twitch import scrape_profile
+    from app.scouting.twitch import scrape_profile
     _platform_header("Twitch")
     usernames = _collect_usernames("Twitch")
     if not usernames:
@@ -680,7 +680,7 @@ def scrape_twitch_interactive():
 
 
 def scrape_linktree_interactive():
-    from app.scrapers.linktree import scrape_linktree, scrape_all
+    from app.scouting.linktree import scrape_linktree, scrape_all
     _platform_header("Link-in-Bio", "Linktree, Stan & more")
 
     console.print("[1] Linktree (linktr.ee)")
@@ -728,7 +728,7 @@ def scrape_linktree_interactive():
 
 
 def scrape_pinterest_interactive():
-    from app.scrapers.pinterest import scrape_profile
+    from app.scouting.pinterest import scrape_profile
     _platform_header("Pinterest")
     usernames = _collect_usernames("Pinterest")
     if not usernames:
@@ -794,25 +794,25 @@ def scrape_from_file():
         platform_key, platform_name = platform_map[platform_choice]
 
         if platform_key == "instagram":
-            from app.scrapers.instagram import scrape_profile_no_login as scraper_func
+            from app.scouting.instagram import scrape_profile_no_login as scraper_func
         elif platform_key == "tiktok":
-            from app.scrapers.tiktok import scrape_tiktok_profile as scraper_func
+            from app.scouting.tiktok import scrape_tiktok_profile as scraper_func
         elif platform_key == "linkedin":
             cookie = os.environ.get('LINKEDIN_COOKIE', '').strip()
             if not cookie:
                 console.print("[red]✗ LINKEDIN_COOKIE not set in .env. Cannot bulk scrape LinkedIn.[/red]")
                 return
-            from app.scrapers.linkedin import scrape_linkedin_profile as scraper_func
+            from app.scouting.linkedin import scrape_linkedin_profile as scraper_func
         elif platform_key == "youtube":
-            from app.scrapers.youtube import scrape_channel as scraper_func
+            from app.scouting.youtube import scrape_channel as scraper_func
         elif platform_key == "github":
-            from app.scrapers.github import scrape_profile as scraper_func
+            from app.scouting.github import scrape_profile as scraper_func
         elif platform_key == "twitch":
-            from app.scrapers.twitch import scrape_profile as scraper_func
+            from app.scouting.twitch import scrape_profile as scraper_func
         elif platform_key == "linktree":
-            from app.scrapers.linktree import scrape_linktree as scraper_func
+            from app.scouting.linktree import scrape_linktree as scraper_func
         elif platform_key == "pinterest":
-            from app.scrapers.pinterest import scrape_profile as scraper_func
+            from app.scouting.pinterest import scrape_profile as scraper_func
 
         console.print()
         console.print(f"[white]Scraping {len(usernames)} {platform_name} profiles...[/white]")
@@ -880,7 +880,7 @@ def scrape_from_file():
 
 
 def discover_interactive():
-    from app.discovery import discover, QUERY_TEMPLATES
+    from app.scouting.discovery import discover, QUERY_TEMPLATES
     _platform_header("Discover", "Cross-border / recurring-payment businesses")
     cats = list(QUERY_TEMPLATES)
     for i, c in enumerate(cats, 1):
@@ -991,7 +991,7 @@ def settings_menu():
 
     elif choice == '4':
         console.print("[white]Testing connection...[/white]")
-        from app.scrapers.stealth import get_proxy
+        from app.common.net import get_proxy
         px = get_proxy()
         if not px:
             console.print("[dim]No proxy configured, testing direct...[/dim]")
@@ -1012,7 +1012,7 @@ def settings_menu():
                 console.print(f"[red]✗ Proxy failed: {str(e)[:80]}[/red]")
                 if free_enabled:
                     console.print("[yellow]Free proxies are unreliable. Trying others...[/yellow]")
-                    from app.scrapers.stealth import _fetch_free_proxies
+                    from app.common.net import _fetch_free_proxies
                     proxies = _fetch_free_proxies()
                     for p in proxies[:3]:
                         p_url = p if p.startswith('http') else f'http://{p}'

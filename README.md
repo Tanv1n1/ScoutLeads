@@ -37,13 +37,36 @@ Menu option **[12] Discover** finds companies and scores them on cross-border si
 - Search needs a free Brave Search API key (`BRAVE_API_KEY` in `.env`); otherwise paste domains directly.
 - Signals are keyword evidence, not proof. Review before outreach.
 
+## Project layout
+
+```
+app/
+  scouting/     find leads: platform scrapers (Instagram, TikTok, LinkedIn, ...) and business discovery   -> scout.py menu
+  enrichment/   complete + verify contacts: SPOC finder, sources/ (site, search), verify.py, people.py   -> enrich_cli.py
+  common/       shared: proxies/user agents/delays (net.py), text helpers, disk cache
+```
+
+The two halves are independent: enrichment never imports scouting, so it can run on its own inside an agent pipeline.
+
 ## SPOC contact completion (agent / pipeline CLI)
 
 ```bash
-python enrich_cli.py spocs.json out.json --batch 10      # resumable; re-run until remaining = 0
+python enrich_cli.py spocs.json out.json --batch 10 --workers 3   # resumable; re-run until remaining = 0
 ```
 
-Input is a named SPOC (`name` plus `company` or `domain`; existing `email`/`phone` are kept and checked). Scout fills what is missing from the company site, web search (`BRAVE_API_KEY`), Hunter (`HUNTER_API_KEY`) and server-confirmed pattern guesses, verifies the email (MX + SMTP with catch-all detection), and returns `email_status` (`VERIFIED` / `SOURCE_CONFIRMED` / `LIKELY` / `UNVERIFIED` / `NOT_FOUND`), phone with scope, sources, and a `gaps` list. Rejected addresses are never returned, and guesses are never presented as found. No social-profile scraping. See [skills/scout-company-enrichment/SKILL.md](skills/scout-company-enrichment/SKILL.md).
+Input is a named SPOC (`name` plus `company` or `domain`; existing `email`/`phone` are kept and checked). Output is the completed record: `email` with `email_status` (`VERIFIED` / `SOURCE_CONFIRMED` / `LIKELY` / `UNVERIFIED` / `NOT_FOUND`), phone with scope, sources, other candidates, and a `gaps` list. Rejected addresses are never returned and guesses are never presented as found. No social-profile scraping.
+
+| Capability | Detail |
+|---|---|
+| Company site | fixed team/contact paths, plus team/leadership/about links found on the homepage and in `sitemap.xml` |
+| Structured data | schema.org `Person` / `Organization` (email, telephone, jobTitle) |
+| Web search | Brave and/or Serper, results cached; result pages fetched (social networks excluded) |
+| Hunter | email-finder |
+| Pattern guesses | from the domain's observed pattern; only accepted if a server/API confirms |
+| Verification | MX + SMTP with catch-all probe; Hunter and ZeroBounce when SMTP can't decide |
+| Operations | parallel workers, resume state, one bad record never loses the batch |
+
+See [skills/scout-company-enrichment/SKILL.md](skills/scout-company-enrichment/SKILL.md) and `.env.example` for keys.
 
 ## Tests
 

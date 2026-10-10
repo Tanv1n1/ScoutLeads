@@ -15,8 +15,8 @@ from typing import Dict, Optional
 import logging
 import re
 
-from app.scrapers.stealth import random_user_agent, get_requests_proxies
-from app.scrapers.utils import extract_email, parse_abbreviated_number
+from app.common.net import random_user_agent, get_requests_proxies
+from app.common.text import extract_email, parse_abbreviated_number
 
 logger = logging.getLogger(__name__)
 

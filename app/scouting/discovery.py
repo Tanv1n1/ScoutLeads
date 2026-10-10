@@ -14,9 +14,9 @@ from urllib.parse import urlparse, parse_qs, unquote
 
 import httpx
 
-from app.scrapers.stealth import random_user_agent, random_delay, get_httpx_proxy
-from app.scrapers.enrichment import LeadEnricher
-from app.scrapers.utils import EMAIL_RE
+from app.common.net import random_user_agent, random_delay, get_httpx_proxy
+from app.enrichment.lead import LeadEnricher
+from app.common.text import EMAIL_RE
 
 logger = logging.getLogger(__name__)
 

@@ -6,17 +6,17 @@ email / phone from multiple public web sources, verify the email, and return a c
 with per-field provenance. Never invents a value: unresolved fields stay empty and are listed
 in `gaps`.
 
-Sources, in order (each independent, so agreement between them is real evidence):
-  1. provided      - what the caller already has (verified, never trusted blindly)
-  2. site          - the company's own team/about/contact pages (mailto, JSON-LD, text near the name)
-  3. web_search    - Brave Search results/snippets for the person + company (needs BRAVE_API_KEY);
-                     social networks are never fetched
-  4. hunter        - Hunter email-finder (needs HUNTER_API_KEY)
-  5. pattern       - address built from the domain's observed pattern / common patterns,
-                     accepted only if the mail server confirms it
+Sources (each independent, so agreement between them is real evidence):
+  provided    what the caller already has (verified, never trusted blindly)
+  site        company site: fixed team/contact paths + links found on the homepage + sitemap,
+              reading mailto/tel links, schema.org Person/Organization data and text near the name
+  web_search  Brave and/or Serper results and the pages they point to (social networks never fetched)
+  hunter      Hunter email-finder
+  pattern     address built from the domain's observed pattern / common patterns,
+              accepted only if the mail server (or a verifier API) confirms it
+Verification: MX + SMTP with catch-all probe, then Hunter / ZeroBounce when SMTP cannot decide.
 """
 
-import html as htmllib
 import logging
 import os
 import re
@@ -24,57 +24,20 @@ import time
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
-import httpx
-
-from app.scrapers.enrichment import LeadEnricher, ROLE_LOCALS
-from app.scrapers.stealth import get_httpx_proxy, random_delay, random_user_agent
-from app.scrapers.utils import EMAIL_RE
+from app.common.net import random_delay
+from app.common.text import EMAIL_RE
+from app.enrichment.lead import LeadEnricher, ROLE_LOCALS
+from app.enrichment.people import json_ld, local_matches_person, name_parts, page_text, phones_in
+from app.enrichment.sources import search as web
+from app.enrichment.sources.site import crawl
+from app.enrichment.verify import Verifier, judge
 
 logger = logging.getLogger(__name__)
 
-TEAM_PATHS = ('', '/contact', '/contact-us', '/about', '/about-us', '/team', '/our-team',
-              '/leadership', '/management', '/people', '/company', '/founders')
 NO_FETCH_HOSTS = ('linkedin.', 'facebook.', 'instagram.', 'twitter.', 'x.com', 'tiktok.',
                   'naukri.', 'glassdoor.', 'zaubacorp.', 'youtube.')
-PHONE_RE = re.compile(r'(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,5}\)?[\s.-]?){2,4}\d{2,5}')
 STATUS_RANK = {'VERIFIED': 4, 'SOURCE_CONFIRMED': 3, 'LIKELY': 2, 'UNVERIFIED': 1}
-
-
-def _text(page: str) -> str:
-    page = re.sub(r'<(script|style)[^>]*>.*?</\1>', ' ', page, flags=re.S | re.I)
-    page = re.sub(r'<a [^>]*href=["\'](?:mailto|tel):([^"\'?]+)[^>]*>', r' \1 ', page, flags=re.I)  # keep mailto/tel targets
-    page = re.sub(r'<[^>]+>', ' ', page)
-    return re.sub(r'\s+', ' ', htmllib.unescape(page))
-
-
-def name_parts(full_name: str):
-    parts = [p for p in re.sub(r'[^A-Za-z\s.-]', ' ', full_name or '').lower().replace('.', ' ').split() if len(p) > 1 or p.isalpha()]
-    parts = [p for p in parts if p not in ('mr', 'ms', 'mrs', 'dr', 'shri', 'smt', 'ca', 'cs')]
-    if len(parts) < 2:
-        return (parts[0] if parts else ''), ''
-    return parts[0], parts[-1]
-
-
-def local_matches_person(local: str, first: str, last: str) -> bool:
-    """Does the local part look like this person's name (not a role inbox, not someone else)?"""
-    local = re.sub(r'[^a-z]', '', local.lower().split('+')[0])
-    if not first or local in ROLE_LOCALS or not local:
-        return False
-    if not last:
-        return local == first
-    forms = {first, first + last, last + first, first[0] + last, first + last[0], last, last + first[0]}
-    return local in forms
-
-
-def phones_in(text: str) -> List[str]:
-    out = []
-    for m in PHONE_RE.findall(text):
-        digits = re.sub(r'\D', '', m)
-        if 10 <= len(digits) <= 13 and not re.fullmatch(r'(\d)\1+', digits) and not re.match(r'(19|20)\d{2}', digits):
-            norm = ('+' if m.strip().startswith('+') else '') + digits
-            if norm not in out:
-                out.append(norm)
-    return out
+CONFIDENCE = {'VERIFIED': 95, 'SOURCE_CONFIRMED': 80, 'LIKELY': 60}
 
 
 class SpocFinder:
@@ -82,34 +45,17 @@ class SpocFinder:
     def __init__(self, enricher: Optional[LeadEnricher] = None, smtp: bool = True):
         self.enr = enricher or LeadEnricher(hunter_api_key=os.environ.get('HUNTER_API_KEY') or None)
         self.smtp = smtp
+        self._verifier = Verifier(self.enr, smtp)
         self._pages: Dict[str, Dict[str, str]] = {}
 
     # ---------- fetching ----------
     def site_pages(self, domain: str) -> Dict[str, str]:
         if domain not in self._pages:
-            pages = {}
-            for path in TEAM_PATHS:
-                html = self.enr._fetch_page(f'https://{domain}{path}')
-                if html:
-                    pages[path or '/'] = html
-                random_delay(0.15, 0.4)
-            self._pages[domain] = pages
+            self._pages[domain] = crawl(self.enr._fetch_page, domain)
         return self._pages[domain]
 
     def web_search(self, query: str, limit: int = 8) -> List[Dict]:
-        key = os.environ.get('BRAVE_API_KEY')
-        if not key:
-            return []
-        try:
-            r = httpx.get('https://api.search.brave.com/res/v1/web/search',
-                          params={'q': query, 'count': limit},
-                          headers={'X-Subscription-Token': key, 'Accept': 'application/json'}, timeout=15)
-            r.raise_for_status()
-            return [{'url': x['url'], 'text': htmllib.unescape(f"{x.get('title', '')} {x.get('description', '')}")}
-                    for x in r.json().get('web', {}).get('results', [])]
-        except (httpx.HTTPError, ValueError, KeyError) as e:
-            logger.warning(f'search failed: {e}')
-            return []
+        return web.search(query, limit)
 
     # ---------- extraction ----------
     def _harvest(self, text: str, source: str, url: str, name: str, domain: str, first: str, last: str,
@@ -140,6 +86,25 @@ class SpocFinder:
             for p in phones_in(text)[:2]:
                 phones.append({'phone': p, 'scope': 'company', 'source': source, 'url': url})
 
+    def _harvest_schema(self, html: str, url: str, domain: str, first: str, last: str,
+                        cands: List[Dict], phones: List[Dict]):
+        """schema.org Person / Organization blocks: structured, so a name match is strong evidence."""
+        data = json_ld(html)
+        for p in data['people']:
+            pf, pl = name_parts(p['name'])
+            if pf == first and (not last or pl == last):
+                if p['email'] and p['email'].endswith('@' + domain) and self.enr._is_valid_email(p['email']):
+                    cands.append({'email': p['email'], 'source': 'site', 'url': url, 'kind': 'person'})
+                for ph in phones_in(p['phone']):
+                    phones.append({'phone': ph, 'scope': 'person', 'source': 'site', 'url': url})
+        for e in data['org_emails']:
+            if e.endswith('@' + domain) and self.enr._is_valid_email(e):
+                cands.append({'email': e, 'source': 'site', 'url': url,
+                              'kind': 'role' if e.split('@')[0] in ROLE_LOCALS else 'other'})
+        for ph in data['org_phones']:
+            for n in phones_in(ph):
+                phones.append({'phone': n, 'scope': 'company', 'source': 'site', 'url': url})
+
     def _pattern_from(self, others: List[str], domain: str, first: str, last: str) -> List[str]:
         """Pattern(s) seen on other staff emails first, then the common ones."""
         out = []
@@ -158,32 +123,14 @@ class SpocFinder:
 
     # ---------- verification ----------
     def verify(self, email: str) -> Dict:
-        v = {'mx': False, 'smtp': 'skipped', 'catch_all': None, 'api': None}
-        if self.smtp:
-            r = self.enr._verify_email_smtp(email)
-            v['mx'] = r['mx']
-            if not r['mx']:
-                v['smtp'] = 'no_mx'
-            elif not r['checked']:
-                v['smtp'] = 'unknown'           # port 25 blocked / greylisted
-            else:
-                v['catch_all'] = r['accept_all']
-                v['smtp'] = 'accepted' if r['exists'] else 'rejected'
-        key = os.environ.get('HUNTER_API_KEY')
-        if key and (v['smtp'] in ('unknown', 'skipped') or v['catch_all']):
-            try:
-                d = httpx.get('https://api.hunter.io/v2/email-verifier', params={'email': email, 'api_key': key},
-                              timeout=20).json().get('data', {})
-                v['api'] = d.get('status')       # valid | invalid | accept_all | webmail | unknown
-            except (httpx.HTTPError, ValueError):
-                pass
-        return v
+        return self._verifier.verify(email)
 
     @staticmethod
     def _status(v: Dict, n_sources: int, kind: str) -> str:
-        if v['smtp'] in ('rejected', 'no_mx') or v['api'] == 'invalid':
+        verdict = judge(v)
+        if verdict == 'invalid':
             return 'REJECTED'
-        if (v['smtp'] == 'accepted' and not v['catch_all']) or v['api'] == 'valid':
+        if verdict == 'valid':
             return 'VERIFIED'
         if kind == 'person' and n_sources >= 2:
             return 'SOURCE_CONFIRMED'            # unverifiable by server, but 2 independent sources show it
@@ -219,10 +166,12 @@ class SpocFinder:
         pages = self.site_pages(domain)
         out['sources_checked'].append(f'site({len(pages)} pages)')
         for path, page in pages.items():
-            self._harvest(_text(page), 'site', f'https://{domain}{"" if path == "/" else path}', name, domain, first, last, cands, phones)
+            url = f'https://{domain}{"" if path == "/" else path}'
+            self._harvest(page_text(page), 'site', url, name, domain, first, last, cands, phones)
+            self._harvest_schema(page, url, domain, first, last, cands, phones)
 
         # web search
-        if os.environ.get('BRAVE_API_KEY') and first:
+        if web.backends() and first:
             seen_urls = set()
             queries = [f'"{name}" "{company or domain}" email', f'"{name}" "@{domain}"', f'"{name}" {company or domain} phone contact']
             for q in queries:
@@ -233,11 +182,12 @@ class SpocFinder:
                         seen_urls.add(res['url'])
                         page = self.enr._fetch_page(res['url'])
                         if page:
-                            self._harvest(_text(page), 'web_search', res['url'], name, domain, first, last, cands, phones)
+                            self._harvest(page_text(page), 'web_search', res['url'], name, domain, first, last, cands, phones)
+                            self._harvest_schema(page, res['url'], domain, first, last, cands, phones)
                 random_delay(0.5, 1.2)
-            out['sources_checked'].append(f'web_search({len(seen_urls)} pages)')
+            out['sources_checked'].append(f"web_search[{'+'.join(web.backends())}]({len(seen_urls)} pages)")
         else:
-            out['gaps'].append('web_search_skipped_no_BRAVE_API_KEY' if first else 'web_search_skipped_no_name')
+            out['gaps'].append('web_search_skipped_no_search_key' if first else 'web_search_skipped_no_name')
 
         # hunter
         if self.enr.hunter_api_key and first and last:
@@ -280,7 +230,7 @@ class SpocFinder:
             b = usable[0]
             out.update(email=b['email'], email_status=b['status'], email_sources=b['sources'],
                        email_verification=b['verification'],
-                       email_confidence={'VERIFIED': 95, 'SOURCE_CONFIRMED': 80, 'LIKELY': 60}[b['status']])
+                       email_confidence=CONFIDENCE[b['status']])
             out['other_candidates'] = [{'email': r['email'], 'status': r['status']} for r in usable[1:4]]
         else:
             out['gaps'].append('email_not_found' if not usable else 'email_unverified')
