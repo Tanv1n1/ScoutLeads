@@ -21,8 +21,8 @@ import logging
 import re
 import json
 
-from app.scrapers.stealth import random_user_agent
-from app.scrapers.utils import extract_email as _shared_extract_email
+from app.common.net import random_user_agent
+from app.common.text import extract_email as _shared_extract_email
 
 logger = logging.getLogger(__name__)
 

@@ -11,11 +11,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
 
-from app.scrapers.stealth import random_user_agent, random_delay
+from app.common.net import random_user_agent, random_delay
 
 logger = logging.getLogger(__name__)
 
-from app.scrapers.utils import EMAIL_RE
+from app.common.text import EMAIL_RE
 
 SMTP_HELO = os.environ.get('SCOUT_SMTP_HELO', 'scout-verify.local')
 SMTP_FROM = os.environ.get('SCOUT_SMTP_FROM', 'verify@scout-verify.local')

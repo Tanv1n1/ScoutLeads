@@ -6,8 +6,8 @@ from typing import Dict, Optional
 
 import httpx
 
-from app.scrapers.stealth import random_user_agent, get_httpx_proxy
-from app.scrapers.utils import extract_email
+from app.common.net import random_user_agent, get_httpx_proxy
+from app.common.text import extract_email
 
 logger = logging.getLogger(__name__)
 

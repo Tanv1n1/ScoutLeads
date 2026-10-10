@@ -1,11 +1,13 @@
 import json
 from unittest.mock import patch
 
-from app.scrapers.utils import extract_email, extract_phone, parse_abbreviated_number
-from app.scrapers.enrichment import LeadEnricher
-from app import discovery
+from app.common.text import extract_email, extract_phone, parse_abbreviated_number
+from app.enrichment.lead import LeadEnricher
+from app.scouting import discovery
 import enrich_cli
-from app.spoc import SpocFinder, local_matches_person, name_parts, phones_in
+from app.enrichment.spoc import SpocFinder
+from app.enrichment.people import local_matches_person, name_parts, phones_in, json_ld
+from app.enrichment.sources import site as site_src
 
 E = LeadEnricher()
 
@@ -140,3 +142,45 @@ def test_cli_batches_and_resumes(tmp_path):
         assert len(json.loads(out.read_text())) == 2
         enrich_cli.main([str(inp), str(out), "--batch", "2", "--no-smtp"])
     assert len(json.loads(out.read_text())) == 3
+
+
+LD = """<script type="application/ld+json">{"@context":"https://schema.org","@graph":[
+ {"@type":"Organization","name":"Acme","email":"mailto:hello@acme.in","telephone":"+91 22 4000 1234"},
+ {"@type":"Person","name":"Dr. Priya Nair","jobTitle":"CEO","email":"p.nair@acme.in","telephone":"+91 98765 43210"}]}</script>"""
+
+
+def test_json_ld_people_and_org():
+    d = json_ld(LD)
+    assert d["people"][0]["email"] == "p.nair@acme.in" and d["org_emails"] == ["hello@acme.in"]
+
+
+def test_schema_person_email_beats_page_text():
+    r = finder(pages={"/about": LD}).find({"name": "Priya Nair", "domain": "acme.in"})
+    assert r["email"] == "p.nair@acme.in" and r["phone"] == "+919876543210" and r["phone_scope"] == "person"
+    assert r["company_inboxes"] == ["hello@acme.in"]
+
+
+def test_site_crawl_follows_homepage_links_and_sitemap():
+    pages = {
+        "https://a.in": '<a href="/meet-the-founders">x</a><a href="/blog/post">y</a><a href="https://other.com/team">z</a>',
+        "https://a.in/meet-the-founders": "founders",
+        "https://a.in/sitemap.xml": "<urlset><loc>https://a.in/leadership-board</loc><loc>https://a.in/shop</loc></urlset>",
+        "https://a.in/leadership-board": "board",
+    }
+    got = site_src.crawl(lambda u: pages.get(u.rstrip("/") if u.count("/") > 2 else u), "a.in")
+    assert "/meet-the-founders" in got and "/leadership-board" in got and "/blog/post" not in got
+
+
+def test_api_verifier_can_decide_when_smtp_cannot():
+    from app.enrichment.verify import judge
+    assert judge({"smtp": "unknown", "catch_all": None, "api": {"zerobounce": "valid"}}) == "valid"
+    assert judge({"smtp": "accepted", "catch_all": True, "api": {"hunter": "invalid"}}) == "invalid"
+    assert judge({"smtp": "accepted", "catch_all": True, "api": {}}) == "undecided"
+
+
+def test_search_falls_back_to_second_backend(monkeypatch):
+    from app.enrichment.sources import search as s
+    monkeypatch.setenv("SCOUT_CACHE", "0"); monkeypatch.setenv("BRAVE_API_KEY", "x"); monkeypatch.setenv("SERPER_API_KEY", "y")
+    with patch.object(s, "_brave", side_effect=s.httpx.HTTPError("down")), \
+         patch.object(s, "_serper", return_value=[{"url": "https://u", "text": "t &amp; t"}]):
+        assert s.search("q") == [{"url": "https://u", "text": "t & t"}]
