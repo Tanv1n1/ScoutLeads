@@ -29,7 +29,7 @@ if _args:
         print(f"Scout v{__version__}")
         sys.exit(0)
     elif arg in ('--help', '-h', 'help'):
-        print(f"Scout v{__version__} - Social media lead generation tool")
+        print(f"Scout v{__version__} - lead scouting and SPOC contact enrichment")
         print()
         print("Usage: python scout.py [options]")
         print()
@@ -54,9 +54,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
 from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeRemainingColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich import box
-from rich.layout import Layout
 from rich.text import Text
 from rich.theme import Theme
 from rich.rule import Rule
@@ -81,56 +80,6 @@ _LOGO_LINES = [
 ]
 
 _session_stats = {"scraped": 0}
-_update_cache = {"checked": False, "latest": None}
-
-
-def _check_for_updates():
-    """Check GitHub releases API for a newer version. Non-blocking, fails silently."""
-    if _update_cache["checked"]:
-        return _update_cache["latest"]
-
-    _update_cache["checked"] = True
-
-    try:
-        import requests as _req
-        resp = _req.get(
-            "https://api.github.com/repos/kiryano/Scout/releases/latest",
-            headers={"Accept": "application/vnd.github.v3+json"},
-            timeout=3,
-        )
-        if resp.status_code != 200:
-            return None
-
-        data = resp.json()
-        tag = data.get("tag_name", "")
-        latest = tag.lstrip("v").strip()
-        if not latest:
-            return None
-
-        def _ver(s):
-            try:
-                return tuple(int(x) for x in s.split("."))
-            except (ValueError, AttributeError):
-                return (0,)
-
-        if _ver(latest) > _ver(__version__):
-            _update_cache["latest"] = latest
-            return latest
-
-    except Exception:
-        pass
-
-    return None
-
-
-def _start_update_check():
-    """Fire off the update check in a background thread so it doesn't block startup."""
-    import threading
-    t = threading.Thread(target=_check_for_updates, daemon=True)
-    t.start()
-    return t
-
-
 custom_theme = Theme({
     "prompt.choices": ACCENT,
     "prompt.default": "dim",
@@ -381,7 +330,7 @@ def show_header():
         console.print(t, justify="center")
 
     console.print()
-    console.print(f"[dim]v{__version__}[/dim]  [white]Lead Generation Tool[/white]", justify="center")
+    console.print(f"[dim]v{__version__}[/dim]  [white]Lead Scouting & Enrichment[/white]", justify="center")
 
     console.print()
     console.print(_gradient_bar(), justify="center")
@@ -396,7 +345,7 @@ def show_header():
     else:
         proxy_str = "[dim]○ off[/dim]"
 
-    status = f"[dim]github.com/kiryano/Scout[/dim]  ·  [dim]Proxy:[/dim] {proxy_str}"
+    status = f"[dim]github.com/Tanv1n1/ScoutLeads[/dim]  ·  [dim]Proxy:[/dim] {proxy_str}"
     if _session_stats["scraped"] > 0:
         status += f"  ·  [dim]Scraped:[/dim] [white]{_session_stats['scraped']}[/white]"
     console.print(status, justify="center")
@@ -1100,9 +1049,7 @@ def view_exports():
 
 
 def main():
-    _update_thread = _start_update_check()
     console.clear()
-    _update_thread.join(timeout=3.0)
     show_header()
 
     while True:
@@ -1122,7 +1069,7 @@ def main():
                 console.print(Rule(style=ACCENT_DIM))
                 console.print(
                     f"  [bold {ACCENT}]Thanks for using Scout[/bold {ACCENT}]  "
-                    "[dim]★ github.com/kiryano/Scout[/dim]"
+                    "[dim]★ github.com/Tanv1n1/ScoutLeads[/dim]"
                 )
                 console.print()
                 break
