@@ -1,0 +1,142 @@
+import json
+from unittest.mock import patch
+
+from app.scrapers.utils import extract_email, extract_phone, parse_abbreviated_number
+from app.scrapers.enrichment import LeadEnricher
+from app import discovery
+import enrich_cli
+from app.spoc import SpocFinder, local_matches_person, name_parts, phones_in
+
+E = LeadEnricher()
+
+SITE = """<title>Acme Digital | Agency</title>
+We ship worldwide. Pricing: $2,000 per month retainer, billed monthly. Pay via Stripe. Prices in USD and GBP.
+<a href="mailto:accounts@acme.in">accounts@acme.in</a> <p>jane.diaz@acme.in</p> <img src="logo@2x.png">
+Call +91 98765 43210"""
+
+
+def test_email_regex_rejects_pipe_and_extracts():
+    assert extract_email("reach me: a.b+c@sub.example.co.uk!") == "a.b+c@sub.example.co.uk"
+    assert extract_email("x@y.c|m") == ""
+
+
+def test_blacklist_matches_domains_not_substrings():
+    assert E._is_valid_email("me@mytest.com")
+    assert not E._is_valid_email("a@test.com")
+    assert not E._is_valid_email("a@sub.sentry.io")
+    assert not E._is_valid_email("logo@2x.png")
+
+
+def test_phone_needs_real_shape():
+    assert extract_phone("followers 1234567890123") == ""
+    assert extract_phone("call +91 98765 43210") == "+919876543210"
+    assert extract_phone("(415) 555-2671") == "4155552671"
+
+
+def test_abbrev_numbers():
+    assert parse_abbreviated_number("1.2K") == 1200
+    assert parse_abbreviated_number("2M") == 2_000_000
+
+
+def test_role_inbox_is_not_a_name_pattern():
+    assert E._detect_pattern("info") is None
+    assert E._detect_pattern("jane.doe") == "first.last"
+    assert E._predict_email_from_pattern("Jane Doe", "https://a.com", ["info@a.com"]) is None
+    assert E._predict_email_from_pattern("Jane Doe", "https://a.com", ["info@a.com", "raj.k@a.com"]) == "jane.doe@a.com"
+
+
+def test_unverifiable_smtp_is_unknown_not_false():
+    with patch.object(E, "_verify_email_smtp", return_value={"exists": False, "accept_all": False, "mx": True, "checked": False, "score": 10}):
+        r = E._score_and_verify_email("sales@a.com", "website")
+    assert r["verified"] is None and r["score"] == 70 and r["role_based"]
+
+
+def test_guess_without_confirmation_is_capped():
+    with patch.object(E, "_verify_email_smtp", return_value={"exists": False, "accept_all": False, "mx": True, "checked": False, "score": 10}):
+        assert E._score_and_verify_email("jane@a.com", "pattern", site_emails_count=3)["score"] <= 35
+
+
+def test_no_mx_caps_score():
+    with patch.object(E, "_verify_email_smtp", return_value={"exists": False, "accept_all": False, "mx": False, "checked": False, "score": 0}):
+        assert E._score_and_verify_email("bio@a.com", "bio")["score"] <= 10
+
+
+def test_analyze_site_signals():
+    with patch.object(E, "_fetch_page", side_effect=lambda u: SITE if u.rstrip("/") == "https://acme.in" else None):
+        lead = discovery.analyze_site("https://acme.in", E)
+    assert lead["cross_border"] and lead["recurring"]
+    assert {"ships_worldwide", "multi_currency", "subscription", "billing_provider"} <= set(lead["signals"].split(","))
+    assert lead["own_emails"][0] == "accounts@acme.in"      # role inbox ranked first
+    assert lead["phone"] == "+919876543210"
+
+
+PAGE = """<h2>Our Team</h2><div>Priya Nair, Founder &amp; CEO<br><a href="mailto:priya@acme.in">email</a> +91 98765 43210</div>
+<div>Rohit Das, CTO rohit.das@acme.in</div><p>General: info@acme.in</p>"""
+OK = {"mx": True, "smtp": "accepted", "catch_all": False, "api": None}
+CATCH_ALL = {"mx": True, "smtp": "accepted", "catch_all": True, "api": None}
+
+
+def finder(verify=OK, pages=None):
+    f = SpocFinder(enricher=LeadEnricher(), smtp=True)
+    f._pages["acme.in"] = pages if pages is not None else {"/team": PAGE}
+    f.verify = lambda email: dict(verify)
+    return f
+
+
+def test_name_matching():
+    assert name_parts("Dr. Priya Nair") == ("priya", "nair")
+    assert local_matches_person("priya.nair", "priya", "nair") and local_matches_person("pnair", "priya", "nair")
+    assert not local_matches_person("info", "priya", "nair") and not local_matches_person("rohit.das", "priya", "nair")
+
+
+def test_phones_in_filters_noise():
+    assert phones_in("call +91 98765 43210 or 2024") == ["+919876543210"]
+    assert phones_in("id 1111111111") == []
+
+
+def test_spoc_found_on_site_and_server_verified():
+    r = finder().find({"lead_id": 1, "name": "Priya Nair", "domain": "acme.in", "company": "Acme"})
+    assert (r["email"], r["email_status"], r["email_confidence"]) == ("priya@acme.in", "VERIFIED", 95)
+    assert r["phone"] == "+919876543210" and r["phone_scope"] == "person"
+    assert r["email_sources"] == ["site"] and "info@acme.in" in r.get("company_inboxes", [])
+
+
+def test_catch_all_site_listed_email_is_likely_not_verified():
+    r = finder(verify=CATCH_ALL).find({"name": "Priya Nair", "domain": "acme.in"})
+    assert r["email"] == "priya@acme.in" and r["email_status"] == "LIKELY"
+
+
+def test_rejected_candidate_is_never_returned():
+    f = finder(verify={"mx": True, "smtp": "rejected", "catch_all": False, "api": None})
+    r = f.find({"name": "Priya Nair", "domain": "acme.in"})
+    assert r["email"] == "" and r["email_status"] == "NOT_FOUND"
+
+
+def test_guess_needs_server_confirmation():
+    f = finder(verify={"mx": True, "smtp": "unknown", "catch_all": None, "api": None}, pages={"/": "nothing here"})
+    r = f.find({"name": "Priya Nair", "domain": "acme.in"})
+    assert r["email"] == "" and r["other_candidates"] and "email_unverified" in r["gaps"]
+    r = finder(pages={"/": "nothing here"}).find({"name": "Priya Nair", "domain": "acme.in"})
+    assert r["email_status"] == "VERIFIED" and r["email_sources"] == ["pattern"]
+
+
+def test_provided_values_are_kept_and_checked():
+    r = finder().find({"name": "Priya Nair", "domain": "acme.in", "email": "priya@acme.in", "phone": "+911111222233"})
+    assert r["phone"] == "+911111222233" and r["phone_scope"] == "provided"
+    assert set(r["email_sources"]) == {"provided", "site"}
+
+
+def test_unresolved_domain_is_a_gap():
+    f = SpocFinder(enricher=LeadEnricher(), smtp=False)
+    with patch.object(f, "_domain", return_value=None):
+        assert f.find({"name": "A B"})["gaps"] == ["domain_unresolved"]
+
+
+def test_cli_batches_and_resumes(tmp_path):
+    inp, out = tmp_path / "in.json", tmp_path / "out.json"
+    inp.write_text(json.dumps([{"lead_id": i, "name": "A B", "domain": "x.in"} for i in range(3)]))
+    with patch.object(SpocFinder, "find", side_effect=lambda s: {"lead_id": s["lead_id"], "email": "a@x.in"}):
+        enrich_cli.main([str(inp), str(out), "--batch", "2", "--no-smtp"])
+        assert len(json.loads(out.read_text())) == 2
+        enrich_cli.main([str(inp), str(out), "--batch", "2", "--no-smtp"])
+    assert len(json.loads(out.read_text())) == 3

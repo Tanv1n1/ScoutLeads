@@ -30,6 +30,31 @@ python scout.py --help
 
 Interactive CLI for scraping profiles, enriching leads with contact info, and exporting to CSV.
 
+## Business discovery (cross-border / recurring-payment prospects)
+
+Menu option **[12] Discover** finds companies and scores them on cross-border signals (worldwide shipping, export language, multi-currency, countries served) and recurring-billing signals (subscription pricing, Stripe/Paddle/Chargebee/Payoneer/Wise scripts). It ranks by fit score and exports role inboxes found on each company's own site.
+
+- Search needs a free Brave Search API key (`BRAVE_API_KEY` in `.env`); otherwise paste domains directly.
+- Signals are keyword evidence, not proof. Review before outreach.
+
+## SPOC contact completion (agent / pipeline CLI)
+
+```bash
+python enrich_cli.py spocs.json out.json --batch 10      # resumable; re-run until remaining = 0
+```
+
+Input is a named SPOC (`name` plus `company` or `domain`; existing `email`/`phone` are kept and checked). Scout fills what is missing from the company site, web search (`BRAVE_API_KEY`), Hunter (`HUNTER_API_KEY`) and server-confirmed pattern guesses, verifies the email (MX + SMTP with catch-all detection), and returns `email_status` (`VERIFIED` / `SOURCE_CONFIRMED` / `LIKELY` / `UNVERIFIED` / `NOT_FOUND`), phone with scope, sources, and a `gaps` list. Rejected addresses are never returned, and guesses are never presented as found. No social-profile scraping. See [skills/scout-company-enrichment/SKILL.md](skills/scout-company-enrichment/SKILL.md).
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt && python -m pytest tests
+```
+
+## Responsible use
+
+Scraping personal profiles can breach platform terms and data-protection law (e.g. India's DPDP Act 2023, GDPR). Prefer company-level, publicly published business contacts, and honour opt-outs.
+
 ## Supported Platforms
 
 | Platform | Auth Required | What It Scrapes |
