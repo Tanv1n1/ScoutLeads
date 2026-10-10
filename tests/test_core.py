@@ -216,3 +216,24 @@ def test_zerobounce_failure_is_not_cached(monkeypatch, tmp_path):
     monkeypatch.setenv("SCOUT_CACHE", "1"); monkeypatch.setenv("SCOUT_CACHE_DIR", str(tmp_path))
     v.verify("x@a.com")
     assert cache.get("verify:x@a.com") is None
+
+
+def test_search_prefers_free_backends_and_falls_back(monkeypatch):
+    from app.enrichment.sources import search as s
+    monkeypatch.setenv("SCOUT_CACHE", "0")
+    for k in ("SERPER_API_KEY", "TAVILY_API_KEY", "BRAVE_API_KEY"):
+        monkeypatch.setenv(k, "x")
+    assert s.backends() == ["serper", "tavily", "brave"]
+    calls = []
+    def serper(q, n): calls.append("serper"); raise s.httpx.HTTPError("down")
+    def tavily(q, n): calls.append("tavily"); return [{"url": "https://u", "text": "a &amp; b"}]
+    monkeypatch.setattr(s, "_serper", serper); monkeypatch.setattr(s, "_tavily", tavily)
+    monkeypatch.setattr(s, "_brave", lambda q, n: calls.append("brave") or [])
+    assert s.search("q") == [{"url": "https://u", "text": "a & b"}] and calls == ["serper", "tavily"]
+
+
+def test_search_unavailable_without_keys(monkeypatch):
+    from app.enrichment.sources import search as s
+    for k in ("SERPER_API_KEY", "TAVILY_API_KEY", "BRAVE_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    assert not s.available() and s.search("q") == []

@@ -78,7 +78,7 @@ Addresses the server rejects, or on domains with no mail server, are never retur
 | Provided | Keeps and re-checks values you pass in | — |
 | Company site | Fixed team/contact paths, plus team/leadership/about links found on the homepage and in `sitemap.xml`; reads `mailto:`/`tel:` links and text next to the name | — |
 | Structured data | schema.org `Person` / `Organization` (email, telephone, job title) | — |
-| Web search | Brave results, then fetches the result pages (social networks are never fetched). Cached 7 days. | `BRAVE_API_KEY` |
+| Web search | Serper, Tavily or Brave (first key found; falls back to the next on failure), then fetches the result pages (social networks are never fetched). Cached 7 days. | one of `SERPER_API_KEY`, `TAVILY_API_KEY`, `BRAVE_API_KEY` |
 | Hunter | Email finder | `HUNTER_API_KEY` |
 | Pattern guess | Builds `first.last@` etc. from patterns seen on the domain; accepted only if confirmed | — |
 | Verify | MX + SMTP with a catch-all probe (free), then **ZeroBounce** for every address that survives; Hunter only as a fallback | `ZEROBOUNCE_API_KEY` (recommended), optional `HUNTER_API_KEY` |
@@ -93,7 +93,9 @@ All optional; the tool runs with none, with fewer sources.
 
 | Variable | Purpose |
 |---|---|
-| `BRAVE_API_KEY` | Web search (enrichment and Discover) |
+| `SERPER_API_KEY` | Web search; 2,500 free queries at signup, no card |
+| `TAVILY_API_KEY` | Web search; 1,000 free credits a month, no card |
+| `BRAVE_API_KEY` | Web search; Brave now requires billing |
 | `ZEROBOUNCE_API_KEY` | Primary email verifier |
 | `HUNTER_API_KEY` | Email finder; verifier fallback |
 | `SCOUT_SMTP_HELO`, `SCOUT_SMTP_FROM` | Identity used in SMTP checks (use a domain you control) |
@@ -114,7 +116,7 @@ python scout.py            # menu;  --verbose for debug logs,  --version,  --hel
 |---|---|
 | Platforms 1–8 | Instagram, TikTok, LinkedIn (session cookie), GitHub, YouTube, Twitch, Linktree and similar, Pinterest: public profile, bio, followers, email and phone found in the bio |
 | 9 Bulk scrape | The same, from a CSV/TXT list of usernames |
-| 12 Discover | Searches for businesses and scores them on cross-border signals (worldwide shipping, export language, multi-currency) and recurring-billing signals (subscription pricing, Stripe/Paddle/Chargebee/Payoneer/Wise). Ranks by fit score. Needs `BRAVE_API_KEY`, or paste domains. |
+| 12 Discover | Searches for businesses and scores them on cross-border signals (worldwide shipping, export language, multi-currency) and recurring-billing signals (subscription pricing, Stripe/Paddle/Chargebee/Payoneer/Wise). Ranks by fit score. Needs a search key, or paste domains. |
 | 10 / 11 | View past exports / settings |
 
 After scraping, an optional enrichment step looks for the lead's email on their site and bio links, detects the email pattern, and verifies by SMTP only. It does not use ZeroBounce and does not complete a named SPOC; for that, use `enrich_cli.py`. Results export to `<platform>_export_<timestamp>.csv`. Discovery signals are keyword evidence, not proof.
