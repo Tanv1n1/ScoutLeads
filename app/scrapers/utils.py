@@ -13,12 +13,14 @@ import re
 from typing import List
 
 
+EMAIL_RE = r'\b[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}\b'
+
+
 def extract_email(text: str) -> str:
     """Extract first email address from text."""
     if not text:
         return ''
-    pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-    matches = re.findall(pattern, text)
+    matches = re.findall(EMAIL_RE, text)
     return matches[0] if matches else ''
 
 
@@ -27,15 +29,15 @@ def extract_phone(text: str) -> str:
     if not text:
         return ''
     patterns = [
-        r'\+?\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9}',
-        r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}',
-        r'\d{3}[-.\s]?\d{3}[-.\s]?\d{4}',
+        r'\+\d{1,3}[-.\s]?\(?\d{2,5}\)?(?:[-.\s]?\d{2,5}){2,3}',   # international, needs a leading +
+        r'\(\d{3}\)[-.\s]?\d{3}[-.\s]?\d{4}',
+        r'\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b',
+        r'\b[6-9]\d{4}[-.\s]?\d{5}\b',                              # Indian mobile
     ]
     for pattern in patterns:
-        matches = re.findall(pattern, text)
-        if matches:
-            phone = re.sub(r'[^\d+]', '', matches[0])
-            if len(phone) >= 10:
+        for m in re.findall(pattern, text):
+            phone = re.sub(r'[^\d+]', '', m)
+            if 10 <= len(re.sub(r'\D', '', phone)) <= 15:
                 return phone
     return ''
 

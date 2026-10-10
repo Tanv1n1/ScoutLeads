@@ -1,3 +1,4 @@
+import os
 import re
 import dns.resolver
 import smtplib
@@ -14,10 +15,15 @@ from app.scrapers.stealth import random_user_agent, random_delay
 
 logger = logging.getLogger(__name__)
 
-EMAIL_RE = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+from app.scrapers.utils import EMAIL_RE
+
+SMTP_HELO = os.environ.get('SCOUT_SMTP_HELO', 'scout-verify.local')
+SMTP_FROM = os.environ.get('SCOUT_SMTP_FROM', 'verify@scout-verify.local')
 EMAIL_BLACKLIST = ['example.com', 'test.com', 'email.com', 'youremail.com',
                    'sentry.io', 'wixpress.com', 'googleapis.com', 'w3.org',
                    'schema.org', 'gravatar.com', 'wordpress.com']
+ROLE_LOCALS = {'info', 'contact', 'hello', 'sales', 'support', 'admin', 'office', 'team', 'enquiry',
+               'enquiries', 'inquiry', 'mail', 'accounts', 'billing', 'finance', 'hr', 'careers', 'export', 'marketing'}
 FILE_EXT_BLACKLIST = ['.png', '.jpg', '.gif', '.css', '.js', '.svg', '.webp', '.ico']
 
 
@@ -127,6 +133,7 @@ class LeadEnricher:
                 enriched['email_score'] = best['score']
                 enriched['email_source'] = best['source']
                 enriched['email_verified'] = best['verified']
+                enriched['email_role_based'] = best['role_based']
 
         if not enriched.get('email') and lead_data.get('full_name') and work_domain:
             enriched['possible_emails'] = self._generate_email_candidates(
@@ -154,10 +161,13 @@ class LeadEnricher:
 
     def _is_valid_email(self, email: str) -> bool:
         lower = email.lower()
-        if any(b in lower for b in EMAIL_BLACKLIST):
+        domain = lower.rsplit('@', 1)[-1]
+        if any(domain == b or domain.endswith('.' + b) for b in EMAIL_BLACKLIST):
             return False
         if any(lower.endswith(ext) for ext in FILE_EXT_BLACKLIST):
             return False
+        if re.match(r'^(?:[a-f0-9]{16,}|(?:you|your|name|user|email|john\.?doe|jane\.?doe|jane\.diaz)\b)', lower.split('@')[0]):
+            return False   # hashes and docs placeholders
         return True
 
     def _extract_phone_from_text(self, text: str) -> Optional[str]:
@@ -178,6 +188,9 @@ class LeadEnricher:
         visible = re.sub(r'\s+', ' ', visible)
 
         phone_patterns = [
+            r'\+91[-.\s]?\(?0?\)?[6-9]\d{4}[-.\s]?\d{5}',                 # India mobile
+            r'\+91[-.\s]?\d{2,4}[-.\s]?\d{6,8}',                          # India landline
+            r'\+\d{1,3}[-.\s]\d{2,5}[-.\s]\d{3,5}(?:[-.\s]\d{3,5})?',      # other international
             r'\+1[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}',
             r'\+?\d{1,3}[-.\s]\(?\d{3}\)[-.\s]?\d{3}[-.\s]?\d{4}',
             r'\(\d{3}\)[-.\s]?\d{3}[-.\s]?\d{4}',
@@ -188,7 +201,7 @@ class LeadEnricher:
             for phone in phones:
                 clean = re.sub(r'[^\d+]', '', phone)
                 if 10 <= len(clean) <= 15:
-                    return phone.strip()
+                    return clean
 
         return None
 
@@ -262,20 +275,19 @@ class LeadEnricher:
         if not domain_emails:
             return None
 
-        sample = domain_emails[0].lower()
-        local = sample.split('@')[0]
-
-        pattern = self._detect_pattern(local)
+        pattern = None
+        for sample in domain_emails:
+            pattern = self._detect_pattern(sample.split('@')[0].lower())
+            if pattern:
+                break
         if not pattern:
             return None
 
-        predicted = self._apply_pattern(pattern, first, last, domain)
-        if predicted and predicted.lower() not in [e.lower() for e in domain_emails]:
-            return predicted
-
-        return predicted
+        return self._apply_pattern(pattern, first, last, domain)
 
     def _detect_pattern(self, local_part: str) -> Optional[str]:
+        if local_part in ROLE_LOCALS:
+            return None
         if '.' in local_part:
             parts = local_part.split('.')
             if len(parts) == 2:
@@ -303,7 +315,7 @@ class LeadEnricher:
         if len(parts) != 2 or not parts[1]:
             return {'exists': False, 'accept_all': False, 'score': 0}
         domain = parts[1]
-        result = {'exists': False, 'accept_all': False, 'score': 0}
+        result = {'exists': False, 'accept_all': False, 'score': 0, 'mx': False, 'checked': False}
 
         try:
             mx_records = dns.resolver.resolve(domain, 'MX')
@@ -312,13 +324,15 @@ class LeadEnricher:
             return result
 
         result['score'] += 10
+        result['mx'] = True
 
         try:
             with smtplib.SMTP(timeout=10) as smtp:
                 smtp.connect(mx_host, 25)
-                smtp.helo('scout-verify.local')
-                smtp.mail('verify@scout-verify.local')
+                smtp.helo(SMTP_HELO)
+                smtp.mail(SMTP_FROM)
                 code, msg = smtp.rcpt(email)
+                result['checked'] = True
 
                 if code == 250:
                     result['exists'] = True
@@ -332,8 +346,7 @@ class LeadEnricher:
 
         except (smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError,
                 socket.timeout, ConnectionRefusedError, OSError) as e:
-            logger.debug(f"SMTP verify failed for {email}: {e}")
-            result['score'] += 20
+            logger.debug(f"SMTP verify failed for {email}: {e}")   # blocked port 25 etc: unknown, not invalid
 
         return result
 
@@ -355,24 +368,31 @@ class LeadEnricher:
         elif source == 'bio_link':
             score += 65
         elif source == 'pattern':
-            score += 40
+            score += 25
             if site_emails_count >= 3:
-                score += 15
-            elif site_emails_count >= 1:
                 score += 10
+            elif site_emails_count >= 1:
+                score += 5
 
         smtp_result = self._verify_email_smtp(email)
-        if smtp_result['exists']:
-            score += 10
-        if smtp_result['accept_all']:
-            score -= 20
+        if not smtp_result['mx']:
+            score = min(score, 10)          # domain cannot receive mail
+        elif smtp_result['exists'] and not smtp_result['accept_all']:
+            score += 20
+        elif smtp_result['accept_all']:
+            score -= 10                     # cannot distinguish real from fake
+        if source in ('pattern', 'smtp_guess') and not smtp_result['exists']:
+            score = min(score, 35)          # guesses need server confirmation
 
+        # None = could not check (port 25 blocked), distinct from False = checked and rejected
+        verified = None if not smtp_result['checked'] else (smtp_result['exists'] and not smtp_result['accept_all'])
         return {
             'email': email,
-            'score': min(score, 100),
+            'score': max(min(score, 100), 0),
             'source': source,
-            'verified': smtp_result['exists'],
+            'verified': verified,
             'accept_all': smtp_result['accept_all'],
+            'role_based': email.split('@')[0].lower() in ROLE_LOCALS,
         }
 
     def _extract_domain(self, website: str) -> Optional[str]:
@@ -444,9 +464,10 @@ class LeadEnricher:
         for domain in guesses:
             try:
                 dns.resolver.resolve(domain, 'MX')
-                return domain
             except Exception:
                 continue
+            if self._fetch_page(domain):   # MX alone matches parked domains; require a live site
+                return domain
 
         return None
 
@@ -556,7 +577,7 @@ class LeadEnricher:
             score += 10
 
         bio = (lead_data.get('bio') or '').lower()
-        keywords = ['coach', 'consultant', 'ceo', 'founder', 'entrepreneur',
+        keywords = ['export', 'import', 'cross-border', 'international', 'global', 'agency', 'saas', 'coach', 'consultant', 'ceo', 'founder', 'entrepreneur',
                      'agency', 'business', 'owner', 'director', 'manager']
         if any(k in bio for k in keywords):
             score += 5

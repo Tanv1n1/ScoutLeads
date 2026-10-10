@@ -181,20 +181,23 @@ def enrich_profiles(profiles):
     ) as progress:
         task = progress.add_task("[white]Enriching leads...", total=len(profiles))
 
-        enriched = []
-        for p in profiles:
-            had_email = bool(p.get('email'))
-            had_phone = bool(p.get('phone'))
+        from concurrent.futures import ThreadPoolExecutor
+        had = [(bool(p.get('email')), bool(p.get('phone'))) for p in profiles]
 
-            result = enricher.enrich_lead(p)
-            enriched.append(result)
+        def _one(p):
+            try:
+                return enricher.enrich_lead(p)
+            except Exception as ex:
+                logging.getLogger(__name__).debug(f"enrich failed: {ex}")
+                return p
+            finally:
+                progress.advance(task)
 
-            if result.get('email') and not had_email:
-                emails_found += 1
-            if result.get('phone') and not had_phone:
-                phones_found += 1
-
-            progress.advance(task)
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            enriched = list(ex.map(_one, profiles))
+        for (he, hp), r in zip(had, enriched):
+            emails_found += bool(r.get('email')) and not he
+            phones_found += bool(r.get('phone')) and not hp
 
     console.print()
 
@@ -442,6 +445,7 @@ def show_menu():
     tools_left = [
         ("9", "Bulk Scrape", "from file"),
         ("10", "Exports", "view files"),
+        ("12", "Discover", "cross-border biz"),
     ]
     tools_right = [
         ("11", "Settings", "config"),
@@ -529,7 +533,7 @@ def _standard_export(profiles, total, platform_name, item_type="profiles"):
             filename = f"{platform_name}_export_{timestamp}.csv"
             with open(filename, 'w', newline='', encoding='utf-8') as f:
                 if profiles:
-                    writer = csv.DictWriter(f, fieldnames=profiles[0].keys())
+                    writer = csv.DictWriter(f, fieldnames=list(dict.fromkeys(k for p in profiles for k in p)), restval='')
                     writer.writeheader()
                     writer.writerows(profiles)
             _export_result(filename, len(profiles), item_type)
@@ -860,7 +864,7 @@ def scrape_from_file():
 
             with open(export_filename, 'w', newline='', encoding='utf-8') as f:
                 if profiles:
-                    writer = csv.DictWriter(f, fieldnames=profiles[0].keys())
+                    writer = csv.DictWriter(f, fieldnames=list(dict.fromkeys(k for p in profiles for k in p)), restval='')
                     writer.writeheader()
                     writer.writerows(profiles)
 
@@ -873,6 +877,44 @@ def scrape_from_file():
         console.print(f"\n[red]✗ Error: File '{filename}' not found![/red]")
     except Exception as e:
         console.print(f"\n[red]✗ Error: {e}[/red]")
+
+
+def discover_interactive():
+    from app.discovery import discover, QUERY_TEMPLATES
+    _platform_header("Discover", "Cross-border / recurring-payment businesses")
+    cats = list(QUERY_TEMPLATES)
+    for i, c in enumerate(cats, 1):
+        console.print(f"  [{ACCENT}][{i}][/{ACCENT}] {c}")
+    raw = Prompt.ask("[>] Categories (e.g. 1,3) or Enter for all", default="")
+    picked = [cats[int(x) - 1] for x in raw.replace(' ', '').split(',') if x.isdigit() and 0 < int(x) <= len(cats)] or cats
+    geo = Prompt.ask("[>] Region", default="India")
+    per_q = int(Prompt.ask("[>] Results per search", default="10"))
+    seed = None
+    if not os.environ.get('BRAVE_API_KEY'):
+        console.print("[yellow]No BRAVE_API_KEY set; web search is often blocked. You can paste domains instead.[/yellow]")
+        raw_seed = Prompt.ask("[>] Domains (comma-separated) or Enter to try search anyway", default="")
+        seed = [d.strip() for d in raw_seed.split(',') if d.strip()] or None
+
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console, transient=True) as progress:
+        task = progress.add_task("[white]Searching and analyzing sites...", total=None)
+        leads = discover(picked, geo, per_q, seed_urls=seed, on_progress=lambda r: progress.update(task, description=f"[white]Analyzed {r[:50]}"))
+
+    if not leads:
+        return _no_results()
+    t = Table(show_header=True, box=box.MINIMAL_HEAVY_HEAD, border_style="dim")
+    for col in ("Company", "Fit", "Signals", "Email"):
+        t.add_column(col)
+    for l in leads[:25]:
+        t.add_row(l['company'][:30], str(l['fit_score']), l['signals'].replace(',', ' '), l['email'] or '-')
+    console.print(t)
+    _success_summary(len(leads), len(leads), "businesses")
+    if Confirm.ask("[+] Export to CSV?", default=True):
+        filename = f"discovery_export_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+        with open(filename, 'w', newline='', encoding='utf-8') as f:
+            w = csv.DictWriter(f, fieldnames=list(dict.fromkeys(k for l in leads for k in l)), restval='')
+            w.writeheader()
+            w.writerows(leads)
+        _export_result(filename, len(leads), "businesses")
 
 
 def settings_menu():
@@ -1063,27 +1105,13 @@ def main():
     _update_thread.join(timeout=3.0)
     show_header()
 
-    latest = _update_cache.get("latest")
-    if latest:
-        console.print()
-        console.print(Panel(
-            f"[bold white]Scout v{latest} is available.[/bold white]\n"
-            f"[dim]You are running v{__version__}. Please update before continuing.[/dim]\n\n"
-            f"[{ACCENT}]git pull origin main[/{ACCENT}]  [dim]or visit[/dim]  [{ACCENT}]github.com/kiryano/Scout[/{ACCENT}]",
-            border_style=ACCENT,
-            title="[bold white]Update Required[/bold white]",
-            padding=(1, 3),
-        ))
-        console.print()
-        sys.exit(1)
-
     while True:
         show_menu()
 
         try:
             choice = Prompt.ask(
                 f"[{ACCENT}]>[/{ACCENT}]",
-                choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"],
+                choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"],
                 default="1",
                 show_choices=False
             )
@@ -1123,6 +1151,8 @@ def main():
                 view_exports()
             elif choice == '11':
                 settings_menu()
+            elif choice == '12':
+                discover_interactive()
 
             _pause()
             console.clear()
