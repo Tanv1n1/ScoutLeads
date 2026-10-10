@@ -1,5 +1,5 @@
 """
-Scout - Social media lead generation tool.
+Scout - lead scouting and SPOC contact enrichment.
 """
 
-__version__ = "1.3.1"
+__version__ = "2.0.0"

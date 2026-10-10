@@ -128,10 +128,10 @@ def test_provided_values_are_kept_and_checked():
     assert set(r["email_sources"]) == {"provided", "site"}
 
 
-def test_unresolved_domain_is_a_gap():
+def test_missing_domain_is_a_gap_not_a_guess():
     f = SpocFinder(enricher=LeadEnricher(), smtp=False)
-    with patch.object(f, "_domain", return_value=None):
-        assert f.find({"name": "A B"})["gaps"] == ["domain_unresolved"]
+    r = f.find({"name": "A B", "company": "Acme"})
+    assert r["gaps"] == ["domain_unresolved"] and r["email"] == ""
 
 
 def test_cli_batches_and_resumes(tmp_path):
@@ -173,14 +173,7 @@ def test_site_crawl_follows_homepage_links_and_sitemap():
 
 def test_api_verifier_can_decide_when_smtp_cannot():
     from app.enrichment.verify import judge
-    assert judge({"smtp": "unknown", "catch_all": None, "api": {"zerobounce": "valid"}}) == "valid"
+    assert judge({"smtp": "unknown", "catch_all": None, "api": {"hunter": "valid"}}) == "valid"
     assert judge({"smtp": "accepted", "catch_all": True, "api": {"hunter": "invalid"}}) == "invalid"
     assert judge({"smtp": "accepted", "catch_all": True, "api": {}}) == "undecided"
 
-
-def test_search_falls_back_to_second_backend(monkeypatch):
-    from app.enrichment.sources import search as s
-    monkeypatch.setenv("SCOUT_CACHE", "0"); monkeypatch.setenv("BRAVE_API_KEY", "x"); monkeypatch.setenv("SERPER_API_KEY", "y")
-    with patch.object(s, "_brave", side_effect=s.httpx.HTTPError("down")), \
-         patch.object(s, "_serper", return_value=[{"url": "https://u", "text": "t &amp; t"}]):
-        assert s.search("q") == [{"url": "https://u", "text": "t & t"}]

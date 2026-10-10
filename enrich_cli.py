@@ -11,8 +11,8 @@ Output: the same SPOC with email (+ status VERIFIED | SOURCE_CONFIRMED | LIKELY 
         confidence, sources, verification detail), phone (+ scope person|company), other candidates,
         `gaps` listing everything still missing, and provenance.
 
-Sources: company site (+discovered team pages, sitemap, schema.org), web search (BRAVE_API_KEY / SERPER_API_KEY),
-Hunter (HUNTER_API_KEY), pattern + SMTP; verifiers: SMTP, Hunter, ZeroBounce (ZEROBOUNCE_API_KEY). No social-profile
+Sources: company site (+discovered team pages, sitemap, schema.org), web search (BRAVE_API_KEY),
+Hunter (HUNTER_API_KEY), pattern + SMTP; verifiers: SMTP, Hunter. No social-profile
 scraping. Each run handles at most --batch pending SPOCs then exits, so it fits short agent sessions;
 re-run until "remaining" is 0.
 """

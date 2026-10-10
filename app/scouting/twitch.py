@@ -13,7 +13,6 @@ Features:
 import requests
 from typing import Dict, Optional
 import logging
-import re
 
 from app.common.net import random_user_agent, get_requests_proxies
 from app.common.text import extract_email

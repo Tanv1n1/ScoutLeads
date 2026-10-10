@@ -5,9 +5,8 @@ import smtplib
 import socket
 import logging
 import threading
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List
 from urllib.parse import urlparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
 
@@ -301,14 +300,9 @@ class LeadEnricher:
         return None
 
     def _apply_pattern(self, pattern: str, first: str, last: str, domain: str) -> Optional[str]:
-        templates = {
-            'first.last': f'{first}.{last}@{domain}',
-            'first': f'{first}@{domain}',
-            'f.last': f'{first[0]}.{last}@{domain}',
-            'flast': f'{first[0]}{last}@{domain}',
-            'firstlast': f'{first}{last}@{domain}',
-        }
-        return templates.get(pattern)
+        local = {'first.last': f'{first}.{last}', 'first': first, 'f.last': f'{first[0]}.{last}',
+                 'flast': f'{first[0]}{last}', 'firstlast': f'{first}{last}'}.get(pattern)
+        return f'{local}@{domain}' if local else None
 
     def _verify_email_smtp(self, email: str) -> Dict:
         parts = email.split('@')
@@ -407,8 +401,6 @@ class LeadEnricher:
     def _find_company_domain(self, lead_data: Dict) -> Optional[str]:
         company = lead_data.get('company', '')
         headline = lead_data.get('headline', '')
-        bio = lead_data.get('bio', '')
-
         company_names = []
 
         if company:
@@ -583,23 +575,3 @@ class LeadEnricher:
             score += 5
 
         return min(score, 100)
-
-    def enrich_bulk(self, leads: List[Dict], max_workers: int = 3) -> List[Dict]:
-        enriched = []
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(self.enrich_lead, lead): lead for lead in leads}
-
-            for future in as_completed(futures):
-                try:
-                    enriched.append(future.result())
-                except Exception as e:
-                    logger.error(f"Enrichment error: {e}")
-                    enriched.append(futures[future])
-
-        return enriched
-
-
-def enrich_lead(lead_data: Dict, hunter_api_key: Optional[str] = None) -> Dict:
-    enricher = LeadEnricher(hunter_api_key=hunter_api_key)
-    return enricher.enrich_lead(lead_data)

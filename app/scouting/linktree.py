@@ -39,21 +39,6 @@ def scrape_linktree(username: str) -> Optional[Dict]:
     return _scrape_profile(username, 'linktree')
 
 
-def scrape_stan(username: str) -> Optional[Dict]:
-    """Scrape Stan.store profile."""
-    return _scrape_profile(username, 'stan')
-
-
-def scrape_linkr(username: str) -> Optional[Dict]:
-    """Scrape Linkr.bio profile."""
-    return _scrape_profile(username, 'linkr')
-
-
-def scrape_biolink(username: str) -> Optional[Dict]:
-    """Scrape Bio.link profile."""
-    return _scrape_profile(username, 'biolink')
-
-
 def scrape_all(username: str) -> Optional[Dict]:
     """Try all link-in-bio platforms for a username."""
     for platform in PLATFORMS.keys():
