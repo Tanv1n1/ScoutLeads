@@ -40,6 +40,8 @@ Re-run the same command until it prints `"remaining": 0`. Progress is saved afte
 | `--batch N` | 10 | Max SPOCs per run |
 | `--workers N` | 3 | SPOCs processed in parallel |
 | `--no-smtp` | off | Skip the local MX/SMTP check (e.g. port 25 blocked) |
+| `--erp FILE` | off | Also write ERP `leadContacts` rows to FILE (see below) |
+| `--erp-min-status S` | `VERIFIED` | Lowest `email_status` written to `workEmail` (`LIKELY`, `SOURCE_CONFIRMED` or `VERIFIED`) |
 
 **Input**: a JSON list. `name` and `domain` (or `website`) are required; a record without a domain is not guessed and comes back with the gap `domain_unresolved`. `company` and `role` are echoed back. Anything you already have (`email`, `phone`) is kept and checked.
 
@@ -69,6 +71,25 @@ Re-run the same command until it prints `"remaining": 0`. Progress is saved afte
 | `UNVERIFIED` / `NOT_FOUND` | Only guesses, or nothing | do not send |
 
 Addresses the server rejects, or on domains with no mail server, are never returned. A guess is never presented as found.
+
+### ERP output (`leadContacts`)
+
+With `--erp rows.json`, Scout also writes one row per SPOC in the ERP's `leadContacts` shape (camelCase field names), ready to upsert on `contactId`. Scout only fills contact fields; `leadEnrichments` (savings, rails, pitch) is out of its scope.
+
+| ERP field | Filled from |
+|---|---|
+| `contactId` | input `contact_id`, else `<lead_id>__<name-slug>` (stable, so re-runs upsert the same row) |
+| `name`, `fullName` | input `name` |
+| `designation` | input `role` (or `designation`) |
+| `din`, `linkedinUrl` | input `din`, `linkedin_url`, passed through; Scout never looks these up |
+| `workEmail` | found email, **only if** `email_status` is at least `--erp-min-status` (default `VERIFIED`) |
+| `phoneNumber` | found phone, **only if** it is the person's own number (`phone_scope` `person`) or was provided; a company switchboard is not written |
+| `dataProvenance` | input `data_provenance` (e.g. `mca_statutory_filing`), else `public_web_sources` |
+| `consentBasis` | input `consent_basis`, else `legitimate-interest-b2b` |
+| `isPrimary` | input `is_primary`, else `true` |
+| `leadId` | input `lead_id`; it must be the `leadMaster` record id, because it becomes the relation's join column |
+
+Empty values are left out of the row rather than sent as null, so an upsert never blanks a field already in the ERP. The full result in `out.json` still holds the status, confidence, sources and gaps for every contact, including emails below the threshold. To store several contacts for one lead, give each its own `contact_id`.
 
 ### Sources and verification
 
