@@ -1,4 +1,4 @@
-"""Email verification: MX + SMTP (with catch-all probe), plus Hunter / ZeroBounce APIs when SMTP can't decide."""
+"""Email verification: MX + SMTP (with catch-all probe), plus the Hunter API when SMTP can't decide."""
 
 import os
 from typing import Dict
@@ -6,10 +6,6 @@ from typing import Dict
 import httpx
 
 from app.common import cache
-
-# ZeroBounce status -> our vocabulary
-_ZB = {'valid': 'valid', 'invalid': 'invalid', 'spamtrap': 'invalid', 'abuse': 'invalid',
-       'do_not_mail': 'invalid', 'catch-all': 'accept_all'}
 
 
 class Verifier:
@@ -37,8 +33,6 @@ class Verifier:
         if v['smtp'] in ('unknown', 'skipped') or v['catch_all']:     # SMTP cannot decide: ask an API
             if os.environ.get('HUNTER_API_KEY'):
                 v['api']['hunter'] = self._hunter(email)
-            if os.environ.get('ZEROBOUNCE_API_KEY'):
-                v['api']['zerobounce'] = self._zerobounce(email)
             v['api'] = {k: s for k, s in v['api'].items() if s}
 
         if v['smtp'] != 'unknown' or v['api']:        # don't cache a transient network failure
@@ -51,15 +45,6 @@ class Verifier:
             d = httpx.get('https://api.hunter.io/v2/email-verifier',
                           params={'email': email, 'api_key': os.environ['HUNTER_API_KEY']}, timeout=25).json().get('data', {})
             return d.get('status')                      # valid | invalid | accept_all | webmail | unknown
-        except (httpx.HTTPError, ValueError):
-            return None
-
-    @staticmethod
-    def _zerobounce(email: str):
-        try:
-            d = httpx.get('https://api.zerobounce.net/v2/validate',
-                          params={'api_key': os.environ['ZEROBOUNCE_API_KEY'], 'email': email}, timeout=25).json()
-            return _ZB.get(str(d.get('status', '')).lower(), 'unknown')
         except (httpx.HTTPError, ValueError):
             return None
 
