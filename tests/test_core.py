@@ -5,6 +5,7 @@ from app.common.text import emails_in, extract_email, parse_abbreviated_number, 
 from app.enrichment.lead import LeadEnricher
 from app.scouting import discovery
 import enrich_cli
+from app.enrichment.erp import contact_id, to_lead_contact
 from app.enrichment.spoc import SpocFinder
 from app.enrichment.people import local_matches_person, name_parts, json_ld
 from app.enrichment.sources import site as site_src
@@ -234,3 +235,44 @@ def test_search_unavailable_without_keys(monkeypatch):
 def test_emails_in_dedupes_filters_and_keeps_order():
     text = "b@acme.in a@acme.in B@ACME.IN me@example.com logo@2x.png x@acme.in"
     assert emails_in(text) == ["b@acme.in", "a@acme.in", "B@ACME.IN", "x@acme.in"]
+
+
+RES = {"email": "priya@acme.in", "email_status": "VERIFIED", "phone": "+919876543210", "phone_scope": "person"}
+SPOC = {"lead_id": "lm-1", "name": "Priya Nair", "role": "CEO", "din": "01234567", "data_provenance": "mca_statutory_filing"}
+
+
+def test_erp_row_maps_fields_and_omits_empties():
+    row = to_lead_contact(SPOC, RES)
+    assert row == {"contactId": "lm-1__priya-nair", "name": "Priya Nair", "fullName": "Priya Nair", "designation": "CEO",
+                   "din": "01234567", "workEmail": "priya@acme.in", "phoneNumber": "+919876543210",
+                   "dataProvenance": "mca_statutory_filing", "consentBasis": "legitimate-interest-b2b",
+                   "isPrimary": True, "leadId": "lm-1"}
+    assert "linkedinUrl" not in row
+
+
+def test_erp_email_below_threshold_is_not_written():
+    low = {**RES, "email_status": "LIKELY"}
+    assert "workEmail" not in to_lead_contact(SPOC, low)
+    assert to_lead_contact(SPOC, low, "LIKELY")["workEmail"] == "priya@acme.in"
+
+
+def test_erp_company_phone_is_not_a_persons_number():
+    assert "phoneNumber" not in to_lead_contact(SPOC, {**RES, "phone_scope": "company"})
+    assert to_lead_contact(SPOC, {**RES, "phone_scope": "provided"})["phoneNumber"] == "+919876543210"
+
+
+def test_erp_overrides_and_default_provenance():
+    row = to_lead_contact({"lead_id": 7, "name": "A B", "contact_id": "C-9", "is_primary": False, "consent_basis": "x"}, {})
+    assert row["contactId"] == "C-9" and row["isPrimary"] is False and row["consentBasis"] == "x"
+    assert row["dataProvenance"] == "public_web_sources" and "workEmail" not in row
+    assert contact_id("L", "Dr. Ana  O'Neil") == "L__dr-ana-o-neil" and contact_id("L", "") == "L"
+
+
+def test_cli_writes_erp_rows_and_supports_two_contacts_per_lead(tmp_path):
+    inp, out, erp = tmp_path / "in.json", tmp_path / "out.json", tmp_path / "rows.json"
+    inp.write_text(json.dumps([{"lead_id": "L1", "name": "A One", "domain": "x.in"}, {"lead_id": "L1", "name": "B Two", "domain": "x.in", "contact_id": "L1-b"}]))
+    fake = lambda s: {"lead_id": s["lead_id"], "email": "a@x.in", "email_status": "VERIFIED", "phone": "", "phone_scope": ""}
+    with patch.object(SpocFinder, "find", side_effect=fake):
+        enrich_cli.main([str(inp), str(out), "--erp", str(erp), "--no-smtp"])
+    rows = json.loads(erp.read_text())
+    assert sorted(r["contactId"] for r in rows) == ["L1-b", "L1__a-one"] and all(r["workEmail"] == "a@x.in" for r in rows)

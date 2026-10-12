@@ -30,3 +30,11 @@ provided values; the company site (team/leadership/about links found on the home
 - `gaps` lists everything still missing (`email_not_found`, `email_unverified`, `phone_not_found`, `web_search_skipped_no_search_key`, `domain_unresolved`). A gap is a data gap, never a rejection of the lead.
 - `company_inboxes` (info@, sales@...) are a fallback, not the SPOC.
 - Always carry `email_sources` and `provenance` into the ERP row. Personal data is subject to DPDP Act 2023.
+
+## Writing to the ERP
+Add `--erp rows.json` to get `leadContacts` rows (camelCase) ready to upsert on `contactId`, in batches of 20 or fewer.
+- Pass `lead_id` as the `leadMaster` record id; it becomes the relation column `leadId`.
+- Pass `din`, `linkedin_url`, `data_provenance` (e.g. `mca_statutory_filing`), `consent_basis`, `is_primary` and `contact_id` when you have them; Scout passes them through and never looks them up.
+- `workEmail` is written only for `VERIFIED` emails unless you lower `--erp-min-status`; `phoneNumber` only for the person's own number.
+- Empty fields are omitted, never nulled, so an upsert won't erase existing ERP data.
+- Scout does not produce `leadEnrichments` rows.
